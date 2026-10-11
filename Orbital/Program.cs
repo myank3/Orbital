@@ -115,6 +115,7 @@ builder.Services
 builder.Services.AddSingleton<EmailTemplateService>();
 builder.Services.AddScoped<EmailService>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<FileStorageService>();
 builder.Services.AddScoped<FriendService>();
 builder.Services.AddScoped<DirectMessageService>();
 builder.Services.AddScoped<GroupService>();

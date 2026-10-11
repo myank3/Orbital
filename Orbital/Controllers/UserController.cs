@@ -1,5 +1,6 @@
 ﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Orbital.DTOs;
 using Orbital.Service;
@@ -63,5 +64,38 @@ public class UserController : ControllerBase
             return BadRequest(new { message = "Failed to update profile." });
 
         return Ok(updated);
+    }
+
+    /// <summary>
+    /// Upload a new avatar image (max 5 MB). Returns the updated profile
+    /// with an absolute URL to the stored image.
+    /// </summary>
+    [HttpPost("avatar")]
+    [RequestSizeLimit(5_000_000)]
+    [ProducesResponseType(typeof(UserProfileDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> UploadAvatar(IFormFile? file)
+    {
+        if (file == null || file.Length == 0)
+            return BadRequest(new { message = "No file provided." });
+
+        var updated = await _userService.UpdateAvatarAsync(CurrentUserId, file);
+        if (updated == null)
+            return BadRequest(new { message = "Upload failed. File may be too large (max 5 MB)." });
+
+        // Convert the relative path (/avatars/xxx.png) to an absolute URL
+        // so the frontend can render it without knowing the API host.
+        var baseUrl = $"{Request.Scheme}://{Request.Host}";
+        var absolute = new UserProfileDto(
+            updated.Id,
+            updated.UserHandle,
+            updated.FullHandle,
+            updated.DisplayName,
+            updated.AvatarUrl != null ? baseUrl + updated.AvatarUrl : null,
+            updated.CreatedAt,
+            updated.Email
+        );
+
+        return Ok(absolute);
     }
 }

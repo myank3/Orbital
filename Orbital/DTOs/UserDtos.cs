@@ -6,7 +6,8 @@ public record UserProfileDto(
     string FullHandle,      // Formatted as "user@orbit"
     string DisplayName,
     string? AvatarUrl,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    string? Email
 );
 
 public record UpdateProfileDto(
