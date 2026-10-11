@@ -20,7 +20,33 @@ public class CallService
         string initiatorId,
         InitiateCallDto dto)
     {
+        // ──────────────────────────────────────────────────────────
+        // Stale session sweep
+        // Any session still open after this window is presumed abandoned
+        // (client crashed, tab closed without cleanup, network dropped).
+        // Close them so they don't permanently block new calls.
+        // ──────────────────────────────────────────────────────────
+        const int staleMinutes = 30;
+        var staleThreshold = DateTime.UtcNow.AddMinutes(-staleMinutes);
+
+        var staleSessions = await _db.CallSessions
+            .Where(c => c.EndedAt == null && c.StartedAt < staleThreshold)
+            .ToListAsync();
+
+        if (staleSessions.Count > 0)
+        {
+            var now = DateTime.UtcNow;
+            foreach (var stale in staleSessions)
+            {
+                stale.EndedAt = now;
+                stale.Status = CallStatus.Ended;
+            }
+            await _db.SaveChangesAsync();
+        }
+
+        // ──────────────────────────────────────────────────────────
         // 1-on-1 Call Validation: Ensure neither peer is on an ongoing call
+        // ──────────────────────────────────────────────────────────
         if (!string.IsNullOrEmpty(dto.PeerId))
         {
             var isPeerBusy = await _db.CallSessions.AnyAsync(c =>

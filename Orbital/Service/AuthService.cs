@@ -133,7 +133,7 @@ public class AuthService
     }
 
     // =========================================================
-    // 3. REFRESH TOKENS
+    // 3. REFRESH TOKENS (requires expired access token)
     // =========================================================
     public async Task<(bool Success, string? Error, InternalTokens? Tokens)> RefreshTokensAsync(RefreshTokenRequestDto dto)
     {
@@ -161,6 +161,37 @@ public class AuthService
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
             return (false, "User associated with token no longer exists.", null);
+
+        var tokens = await GenerateAuthTokensAsync(user);
+        return (true, null, tokens);
+    }
+
+    // =========================================================
+    // 3b. REFRESH TOKENS (by value — cookie-only, no access token)
+    // =========================================================
+    public async Task<(bool Success, string? Error, InternalTokens? Tokens)> RefreshTokensByValueAsync(string refreshToken)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken))
+            return (false, "Missing refresh token.", null);
+
+        var storedToken = await _db.RefreshTokens
+            .FirstOrDefaultAsync(rt => rt.Token == refreshToken);
+
+        if (storedToken == null ||
+            storedToken.IsUsed ||
+            storedToken.IsRevoked ||
+            storedToken.ExpiryDate < DateTime.UtcNow)
+        {
+            return (false, "Refresh token is invalid or expired.", null);
+        }
+
+        var user = await _userManager.FindByIdAsync(storedToken.UserId);
+        if (user == null)
+            return (false, "User associated with token no longer exists.", null);
+
+        // Rotate: mark used, issue new pair
+        storedToken.IsUsed = true;
+        await _db.SaveChangesAsync();
 
         var tokens = await GenerateAuthTokensAsync(user);
         return (true, null, tokens);
@@ -290,7 +321,10 @@ public class AuthService
         return $"{frontendUrl}/reset-password?email={encodedEmail}&token={encodedToken}";
     }
 
-    private async Task<InternalTokens> GenerateAuthTokensAsync(ApplicationUser user)
+    // PUBLIC so AuthController.GoogleCallback can issue a JWT for an
+    // externally-authenticated user without going through LoginAsync
+    // (which requires a password).
+    public async Task<InternalTokens> GenerateAuthTokensAsync(ApplicationUser user)
     {
         var jwtId = Guid.NewGuid().ToString();
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Jwt:Key"]!));

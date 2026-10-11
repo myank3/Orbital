@@ -1,7 +1,12 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Google;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Orbital.DTOs;
+using Orbital.Models;
 using Orbital.Service;
+using System.Security.Claims;
 
 namespace Orbital.Controllers;
 
@@ -10,10 +15,17 @@ namespace Orbital.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly AuthService _authService;
+    private readonly UserManager<ApplicationUser> _userManager;
+    private readonly IConfiguration _config;
 
-    public AuthController(AuthService authService)
+    public AuthController(
+        AuthService authService,
+        UserManager<ApplicationUser> userManager,
+        IConfiguration config)
     {
         _authService = authService;
+        _userManager = userManager;
+        _config = config;
     }
 
     [HttpPost("register")]
@@ -42,22 +54,108 @@ public class AuthController : ControllerBase
         return Ok(new LoginResponseDto(tokens.AccessToken));
     }
 
+    // ─────────────────────────────────────────────────────────
+    // GOOGLE OAUTH
+    // ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Starts the Google OAuth challenge. The browser is redirected to Google,
+    /// then back to <see cref="GoogleCallback"/>.
+    /// </summary>
+    [HttpGet("google-login")]
+    public IActionResult GoogleLogin()
+    {
+        var redirectUrl = Url.Action(nameof(GoogleCallback), "Auth", null, Request.Scheme);
+        var properties = new AuthenticationProperties { RedirectUri = redirectUrl };
+        return Challenge(properties, GoogleDefaults.AuthenticationScheme);
+    }
+
+    /// <summary>
+    /// Handles the redirect back from Google. Finds or creates the local user,
+    /// issues our own JWT, sets the refresh cookie, and hands off to the SPA.
+    /// </summary>
+    [HttpGet("google-callback")]
+    public async Task<IActionResult> GoogleCallback()
+    {
+        var frontendUrl = _config["Client:BaseUrl"] ?? "http://localhost:3000";
+
+        var result = await HttpContext.AuthenticateAsync(IdentityConstants.ExternalScheme);
+        if (!result.Succeeded || result.Principal == null)
+            return Redirect($"{frontendUrl}/login?error=google_failed");
+
+        var email = result.Principal.FindFirstValue(ClaimTypes.Email);
+        if (string.IsNullOrWhiteSpace(email))
+            return Redirect($"{frontendUrl}/login?error=google_no_email");
+
+        var normalizedEmail = email.Trim().ToLowerInvariant();
+        var user = await _userManager.FindByEmailAsync(normalizedEmail);
+
+        if (user == null)
+        {
+            // Generate a unique handle from the email prefix
+            var baseHandle = new string(
+                normalizedEmail.Split('@')[0]
+                    .ToLowerInvariant()
+                    .Where(c => char.IsLetterOrDigit(c) || c == '_')
+                    .ToArray()
+            );
+            if (baseHandle.Length < 3) baseHandle = "user";
+
+            var handle = baseHandle;
+            var suffix = 0;
+            while (await _userManager.FindByNameAsync($"{handle}@orbit") != null)
+            {
+                suffix++;
+                handle = $"{baseHandle}{suffix}";
+            }
+
+            user = new ApplicationUser
+            {
+                UserName = $"{handle}@orbit",
+                Email = normalizedEmail,
+                UserHandle = handle,
+                Realm = "orbit",
+                DisplayName = result.Principal.FindFirstValue(ClaimTypes.Name) ?? handle,
+                EmailConfirmed = true,   // Google already verified the email
+                CreatedAt = DateTime.UtcNow
+            };
+
+            var createResult = await _userManager.CreateAsync(user);
+            if (!createResult.Succeeded)
+                return Redirect($"{frontendUrl}/login?error=google_create_failed");
+
+            await _userManager.AddToRoleAsync(user, "User");
+        }
+
+        // Clean up the temporary external-login cookie set by ASP.NET Identity
+        await HttpContext.SignOutAsync(IdentityConstants.ExternalScheme);
+
+        // Issue our own JWT
+        var tokens = await _authService.GenerateAuthTokensAsync(user);
+
+        // Same refresh cookie path as password login
+        AppendRefreshTokenCookie(tokens.RefreshToken, tokens.RefreshTokenExpiry);
+
+        return Redirect(
+            $"{frontendUrl}/auth/google/success?token={Uri.EscapeDataString(tokens.AccessToken)}"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // REFRESH / LOGOUT / EMAIL / PASSWORD
+    // ─────────────────────────────────────────────────────────
+
     [HttpPost("refresh")]
+    [AllowAnonymous]
     [ProducesResponseType(typeof(LoginResponseDto), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Refresh()
     {
         var refreshToken = Request.Cookies["refreshToken"];
+        if (string.IsNullOrEmpty(refreshToken))
+            return Unauthorized(new { message = "No refresh token." });
 
-        var authHeader = Request.Headers.Authorization.ToString();
-        var accessToken = authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
-            ? authHeader["Bearer ".Length..].Trim()
-            : null;
-
-        if (string.IsNullOrEmpty(refreshToken) || string.IsNullOrEmpty(accessToken))
-            return Unauthorized(new { message = "Missing access or refresh token." });
-
-        var (success, error, tokens) = await _authService.RefreshTokensAsync(new RefreshTokenRequestDto(accessToken, refreshToken));
+        var (success, error, tokens) = await _authService.RefreshTokensByValueAsync(refreshToken);
         if (!success || tokens == null)
             return Unauthorized(new { message = error });
 

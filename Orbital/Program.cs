@@ -71,7 +71,12 @@ builder.Services
             ValidAudience = builder.Configuration["Jwt:Audience"],
             IssuerSigningKey = new SymmetricSecurityKey(
                 Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!)),
-            ClockSkew = TimeSpan.Zero,
+
+            // Allow 2 minutes of clock drift between server and client.
+            // Zero skew causes premature 401s when client clocks are
+            // slightly behind. 2 min is the common baseline.
+            ClockSkew = TimeSpan.FromMinutes(2),
+
             NameClaimType = ClaimTypes.Name,
             RoleClaimType = ClaimTypes.Role
         };
@@ -113,7 +118,7 @@ builder.Services.AddSingleton<PresenceTracker>();
 // 7. SignalR
 builder.Services.AddSignalR();
 
-// 8. CORS (Configured safely for WebSockets & credentials)
+// 8. CORS — permissive for dev, tighten before production
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -134,6 +139,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+// Redirect HTTP → HTTPS. Must run before static files and endpoints.
 app.UseHttpsRedirection();
 
 // CORS must sit before Authentication & Authorization
