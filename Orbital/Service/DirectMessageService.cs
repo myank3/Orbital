@@ -108,9 +108,10 @@ public class DirectMessageService
             await _db.SaveChangesAsync();
         }
     }
+
     public async Task<(bool Success, string? Error)> DeleteMessageAsync(
-    string userId,
-    long messageId)
+        string userId,
+        long messageId)
     {
         var message = await _db.DirectMessages.FindAsync(messageId);
         if (message == null)
@@ -120,6 +121,31 @@ public class DirectMessageService
             return (false, "You can only delete your own messages.");
 
         _db.DirectMessages.Remove(message);
+        await _db.SaveChangesAsync();
+
+        return (true, null);
+    }
+
+    // ─── NEW: Clear Conversation ────────────────────────────────
+
+    /// <summary>
+    /// Deletes every message between the current user and the target user,
+    /// in both directions. Removes the conversation for both sides.
+    /// </summary>
+    public async Task<(bool Success, string? Error)> ClearConversationAsync(
+        string userId,
+        string targetUserId)
+    {
+        var messages = await _db.DirectMessages
+            .Where(m =>
+                (m.SenderId == userId && m.RecipientId == targetUserId) ||
+                (m.SenderId == targetUserId && m.RecipientId == userId))
+            .ToListAsync();
+
+        if (messages.Count == 0)
+            return (true, null); // nothing to delete, still success
+
+        _db.DirectMessages.RemoveRange(messages);
         await _db.SaveChangesAsync();
 
         return (true, null);

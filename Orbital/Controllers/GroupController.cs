@@ -104,4 +104,57 @@ public class GroupController : ControllerBase
         var messages = await _groupService.GetGroupMessagesAsync(groupId, CurrentUserId, beforeId, take);
         return Ok(messages);
     }
+
+    // ─── NEW: Leave / Kick / Delete ─────────────────────────────
+
+    /// <summary>
+    /// Leave a group (self-removal). If you are the last member, the
+    /// group is deleted. If you are the creator and others remain,
+    /// ownership transfers to another member.
+    /// </summary>
+    [HttpPost("{groupId:int}/leave")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> LeaveGroup(int groupId)
+    {
+        var (success, error) = await _groupService.RemoveOrLeaveMemberAsync(
+            CurrentUserId, groupId, CurrentUserId);
+        if (!success)
+            return BadRequest(new { message = error });
+
+        return Ok(new { message = "Left group." });
+    }
+
+    /// <summary>
+    /// Remove another member from a group. Creator only.
+    /// </summary>
+    [HttpDelete("{groupId:int}/members/{targetUserId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> RemoveMember(int groupId, string targetUserId)
+    {
+        var (success, error) = await _groupService.RemoveOrLeaveMemberAsync(
+            CurrentUserId, groupId, targetUserId);
+        if (!success)
+            return BadRequest(new { message = error });
+
+        return Ok(new { message = "Member removed." });
+    }
+
+    /// <summary>
+    /// Delete the entire group. Creator only. Removes all members,
+    /// all messages, and the group itself.
+    /// </summary>
+    [HttpDelete("{groupId:int}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> DeleteGroup(int groupId)
+    {
+        var (success, error) = await _groupService.DeleteGroupAsync(
+            CurrentUserId, groupId);
+        if (!success)
+            return BadRequest(new { message = error });
+
+        return Ok(new { message = "Group deleted." });
+    }
 }

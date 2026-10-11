@@ -141,4 +141,71 @@ public class FriendService
             ))
             .ToListAsync();
     }
+
+    // ─── NEW: Unfriend and Block ────────────────────────────────
+
+    /// <summary>
+    /// Removes an accepted friendship. Works for either direction —
+    /// you can unfriend someone you accepted, or someone who added you.
+    /// </summary>
+    public async Task<(bool Success, string? Error)> UnfriendAsync(
+        string userId,
+        string targetUserId)
+    {
+        var friendship = await _db.Friendships.FirstOrDefaultAsync(f =>
+            (f.RequesterId == userId && f.AddresseeId == targetUserId) ||
+            (f.RequesterId == targetUserId && f.AddresseeId == userId));
+
+        if (friendship == null)
+            return (false, "You are not friends with this user.");
+
+        _db.Friendships.Remove(friendship);
+        await _db.SaveChangesAsync();
+
+        return (true, null);
+    }
+
+    /// <summary>
+    /// Toggles the friendship row into (or out of) the Blocked state.
+    /// Blocking preserves the row so the SendRequestAsync guard can
+    /// refuse to re-add the pair. Unblocking reverts to Pending so
+    /// either side can send a fresh request.
+    /// </summary>
+    public async Task<(bool Success, string? Error)> SetBlockedAsync(
+        string userId,
+        string targetUserId,
+        bool blocked)
+    {
+        if (userId == targetUserId)
+            return (false, "You cannot block yourself.");
+
+        var friendship = await _db.Friendships.FirstOrDefaultAsync(f =>
+            (f.RequesterId == userId && f.AddresseeId == targetUserId) ||
+            (f.RequesterId == targetUserId && f.AddresseeId == userId));
+
+        if (friendship == null)
+        {
+            if (!blocked)
+                return (true, null); // unblock with no existing row = no-op
+
+            friendship = new Friendship
+            {
+                RequesterId = userId,
+                AddresseeId = targetUserId,
+                Status = FriendshipStatus.Blocked,
+                CreatedAt = DateTime.UtcNow
+            };
+            await _db.Friendships.AddAsync(friendship);
+        }
+        else
+        {
+            friendship.Status = blocked
+                ? FriendshipStatus.Blocked
+                : FriendshipStatus.Pending;
+            friendship.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await _db.SaveChangesAsync();
+        return (true, null);
+    }
 }

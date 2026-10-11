@@ -130,7 +130,7 @@ public class GroupService
         if (!isSelfRemoval && !isCreator)
             return (false, "Only the group creator can remove other members.");
 
-        // If the creator leaves and there are other members, you can transfer ownership or prevent orphaned group
+        // If the creator leaves and there are other members, transfer ownership
         if (isSelfRemoval && isCreator && group.Members.Count > 1)
         {
             var nextOwner = group.Members.First(m => m.UserId != targetUserId);
@@ -198,8 +198,8 @@ public class GroupService
             $"{m.User.UserHandle}@{m.User.Realm}",
             m.User.DisplayName,
             m.User.AvatarUrl,
-            m.User.CreatedAt
-            , m.User.Email
+            m.User.CreatedAt,
+            m.User.Email
         )).ToList();
 
         return new GroupDetailDto(
@@ -305,5 +305,43 @@ public class GroupService
                 m.SentAt
             ))
             .ToList();
+    }
+
+    // ─── NEW: Delete group (creator only) ───────────────────────
+
+    /// <summary>
+    /// Deletes a group and all its messages and members. Creator only.
+    /// This is distinct from "leave" — everyone loses access, history gone.
+    /// </summary>
+    public async Task<(bool Success, string? Error)> DeleteGroupAsync(
+        string requestingUserId,
+        int groupId)
+    {
+        var group = await _db.Groups
+            .Include(g => g.Members)
+            .FirstOrDefaultAsync(g => g.Id == groupId);
+
+        if (group == null)
+            return (false, "Group not found.");
+
+        if (group.CreatedById != requestingUserId)
+            return (false, "Only the group creator can delete this group.");
+
+        // Remove all members first
+        if (group.Members.Count > 0)
+            _db.GroupMembers.RemoveRange(group.Members);
+
+        // Remove all messages in the group
+        var messages = await _db.GroupMessages
+            .Where(m => m.GroupId == groupId)
+            .ToListAsync();
+        if (messages.Count > 0)
+            _db.GroupMessages.RemoveRange(messages);
+
+        // Remove the group itself
+        _db.Groups.Remove(group);
+
+        await _db.SaveChangesAsync();
+        return (true, null);
     }
 }

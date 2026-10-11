@@ -52,7 +52,15 @@ public class DirectMessageController : ControllerBase
     /// <summary>
     /// Mark all incoming messages from a specific sender as read.
     /// </summary>
-    /// /// <summary>
+    [HttpPost("read/{senderId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> MarkAsRead(string senderId)
+    {
+        await _dmService.MarkAsReadAsync(CurrentUserId, senderId);
+        return Ok(new { message = "Messages marked as read." });
+    }
+
+    /// <summary>
     /// Delete your own message.
     /// </summary>
     [HttpDelete("{messageId:long}")]
@@ -67,11 +75,22 @@ public class DirectMessageController : ControllerBase
 
         return Ok(new { message = "Deleted." });
     }
-    [HttpPost("read/{senderId}")]
+
+    // ─── NEW: Clear conversation ────────────────────────────────
+
+    /// <summary>
+    /// Delete every message between the current user and the target user.
+    /// Removes the conversation for both sides (hard delete).
+    /// </summary>
+    [HttpDelete("conversation/{targetUserId}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<IActionResult> MarkAsRead(string senderId)
+    public async Task<IActionResult> ClearConversation(string targetUserId)
     {
-        await _dmService.MarkAsReadAsync(CurrentUserId, senderId);
-        return Ok(new { message = "Messages marked as read." });
+        var (success, error) = await _dmService.ClearConversationAsync(
+            CurrentUserId, targetUserId);
+        if (!success)
+            return BadRequest(new { message = error });
+
+        return Ok(new { message = "Conversation cleared." });
     }
 }

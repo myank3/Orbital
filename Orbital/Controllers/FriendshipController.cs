@@ -72,4 +72,51 @@ public class FriendshipController : ControllerBase
         var pending = await _friendService.GetPendingRequestsAsync(CurrentUserId);
         return Ok(pending);
     }
+
+    // ─── NEW: Unfriend, Block, Unblock ──────────────────────────
+
+    /// <summary>
+    /// Remove an existing friendship. Either side can unfriend.
+    /// </summary>
+    [HttpDelete("unfriend/{targetUserId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Unfriend(string targetUserId)
+    {
+        var (success, error) = await _friendService.UnfriendAsync(CurrentUserId, targetUserId);
+        if (!success)
+            return BadRequest(new { message = error });
+
+        return Ok(new { message = "Unfriended." });
+    }
+
+    /// <summary>
+    /// Block a user. Prevents future friend requests and DM delivery.
+    /// </summary>
+    [HttpPost("block/{targetUserId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Block(string targetUserId)
+    {
+        var (success, error) = await _friendService.SetBlockedAsync(CurrentUserId, targetUserId, true);
+        if (!success)
+            return BadRequest(new { message = error });
+
+        return Ok(new { message = "Blocked." });
+    }
+
+    /// <summary>
+    /// Unblock a previously blocked user. Their friendship reverts to Pending.
+    /// </summary>
+    [HttpPost("unblock/{targetUserId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Unblock(string targetUserId)
+    {
+        var (success, error) = await _friendService.SetBlockedAsync(CurrentUserId, targetUserId, false);
+        if (!success)
+            return BadRequest(new { message = error });
+
+        return Ok(new { message = "Unblocked." });
+    }
 }
