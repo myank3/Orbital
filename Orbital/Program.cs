@@ -15,6 +15,14 @@ using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ── Kestrel request body limit ────────────────────────────────
+// Default is ~28.6 MB. Raised to 33 MB to accommodate a 25 MB
+// file + base64 inflation (~33%) being posted through the hub.
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = 33_000_000;
+});
+
 // 1. Swagger / OpenAPI
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -116,7 +124,14 @@ builder.Services.AddScoped<UserService>();
 builder.Services.AddSingleton<PresenceTracker>();
 
 // 7. SignalR
-builder.Services.AddSignalR();
+// Raised MaximumReceiveMessageSize from the default of 32 KB to 30 MB
+// so attachments (images, files, media) can be sent over the hub. The
+// default limit silently kills the connection on any payload larger
+// than 32 KB.
+builder.Services.AddSignalR(options =>
+{
+    options.MaximumReceiveMessageSize = 30 * 1024 * 1024; // 30 MB
+});
 
 // 8. CORS — permissive for dev, tighten before production
 builder.Services.AddCors(options =>
