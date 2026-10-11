@@ -52,6 +52,21 @@ public class DirectMessageController : ControllerBase
     /// <summary>
     /// Mark all incoming messages from a specific sender as read.
     /// </summary>
+    /// /// <summary>
+    /// Delete your own message.
+    /// </summary>
+    [HttpDelete("{messageId:long}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> DeleteMessage(long messageId)
+    {
+        var (success, error) = await _dmService.DeleteMessageAsync(
+            CurrentUserId, messageId);
+        if (!success)
+            return BadRequest(new { message = error });
+
+        return Ok(new { message = "Deleted." });
+    }
     [HttpPost("read/{senderId}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> MarkAsRead(string senderId)
