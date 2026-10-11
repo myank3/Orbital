@@ -1,5 +1,10 @@
+using System.Security.Claims;
+using System.Text;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
@@ -10,38 +15,43 @@ using Orbital.Hubs;
 using Orbital.Models;
 using Orbital.Service;
 using Swashbuckle.AspNetCore.SwaggerGen;
-using System.Security.Claims;
-using System.Text;
-using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── Kestrel request body limit ────────────────────────────────
+// ── 1. Kestrel & Multipart Form Limits (33 MB) ─────────────────────────────
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = 33_000_000;
 });
 
-// 1. Swagger / OpenAPI
+builder.Services.Configure<FormOptions>(options =>
+{
+    options.ValueLengthLimit = 33_000_000;
+    options.MultipartBodyLengthLimit = 33_000_000;
+    options.MultipartHeadersLengthLimit = 33_000_000;
+});
+
+// ── 2. Swagger / OpenAPI Configuration ─────────────────────────────────────
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddTransient<IConfigureOptions<SwaggerGenOptions>, ConfigureSwaggerOptions>();
 
-// 2. Controllers & JSON Options
+// ── 3. Controllers & JSON Serialization ────────────────────────────────────
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        options.JsonSerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
     });
 
-// 3. Database Context
+// ── 4. Database Context ────────────────────────────────────────────────────
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("Connection string 'DefaultConnection' not found in appsettings.json.");
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseSqlServer(connectionString));
 
-// 4. Identity Setup
+// ── 5. ASP.NET Core Identity ───────────────────────────────────────────────
 builder.Services
     .AddIdentity<ApplicationUser, ApplicationRole>(options =>
     {
@@ -55,7 +65,7 @@ builder.Services
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddDefaultTokenProviders();
 
-// 5. Authentication & JWT Configuration
+// ── 6. Authentication & JWT Configuration ──────────────────────────────────
 builder.Services
     .AddAuthentication(options =>
     {
@@ -80,11 +90,12 @@ builder.Services
 
             ClockSkew = TimeSpan.FromMinutes(2),
 
+            // Preserves readable username for controllers / User.Identity.Name
             NameClaimType = ClaimTypes.Name,
             RoleClaimType = ClaimTypes.Role
         };
 
-        // SignalR: token from query string on WebSocket upgrade
+        // Extract token for SignalR WebSocket upgrades & long-polling
         options.Events = new JwtBearerEvents
         {
             OnMessageReceived = context =>
@@ -106,7 +117,17 @@ builder.Services
         googleOptions.SignInScheme = IdentityConstants.ExternalScheme;
     });
 
-// 6. Application Services & In-Memory Presence Tracker
+// ── 7. SignalR & Custom User ID Provider ───────────────────────────────────
+// Directs SignalR's Context.UserIdentifier to the GUID, leaving User.Identity.Name intact
+builder.Services.AddSingleton<IUserIdProvider, CustomUserIdProvider>();
+
+builder.Services.AddSignalR(options =>
+{
+    options.MaximumReceiveMessageSize = 33 * 1024 * 1024; // 33 MB
+    options.EnableDetailedErrors = true;
+});
+
+// ── 8. Application Services & In-Memory Presence Tracker ───────────────────
 builder.Services.AddSingleton<EmailTemplateService>();
 builder.Services.AddScoped<EmailService>();
 builder.Services.AddScoped<AuthService>();
@@ -116,16 +137,9 @@ builder.Services.AddScoped<DirectMessageService>();
 builder.Services.AddScoped<GroupService>();
 builder.Services.AddScoped<CallService>();
 builder.Services.AddScoped<UserService>();
-
 builder.Services.AddSingleton<PresenceTracker>();
 
-// 7. SignalR
-builder.Services.AddSignalR(options =>
-{
-    options.MaximumReceiveMessageSize = 30 * 1024 * 1024; // 30 MB
-});
-
-// 8. CORS
+// ── 9. CORS Policy ─────────────────────────────────────────────────────────
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -139,15 +153,20 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// ── Static files ─────────────────────────────────────────────
-// On MonsterASP, ContentRootPath IS the served site root
-// (D:\Sites\site97704\wwwroot). Do NOT append another "wwwroot".
-var avatarsDir = Path.Combine(app.Environment.ContentRootPath, "avatars");
-Directory.CreateDirectory(avatarsDir);
+// ── 10. Swagger (Enabled in all environments for testing) ──────────────────
+app.UseSwagger();
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Orbital API v1");
+    c.RoutePrefix = "swagger";
+});
 
-app.Logger.LogInformation("ContentRoot : {path}", app.Environment.ContentRootPath);
-app.Logger.LogInformation("Avatars dir : {path}", avatarsDir);
-app.Logger.LogInformation("Environment : {env}", app.Environment.EnvironmentName);
+// ── 11. Static File Serving ────────────────────────────────────────────────
+var avatarsDir = Path.Combine(app.Environment.ContentRootPath, "avatars");
+if (!Directory.Exists(avatarsDir))
+{
+    Directory.CreateDirectory(avatarsDir);
+}
 
 app.UseStaticFiles(new StaticFileOptions
 {
@@ -161,21 +180,26 @@ app.UseStaticFiles(new StaticFileOptions
     RequestPath = ""
 });
 
-// Pipeline Configuration
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
-
+// ── 12. Middleware Pipeline Sequence ───────────────────────────────────────
 app.UseHttpsRedirection();
+
+// CORS must be executed before Authentication and Hub mappings
 app.UseCors("AllowAll");
 
 app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
-
 app.MapHub<ChatHub>("/hubs/chat");
 
 app.Run();
+
+// ── 13. SignalR Identity Resolution Helper ─────────────────────────────────
+public class CustomUserIdProvider : IUserIdProvider
+{
+    public string? GetUserId(HubConnectionContext connection)
+    {
+        return connection.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? connection.User?.FindFirst("sub")?.Value;
+    }
+}
