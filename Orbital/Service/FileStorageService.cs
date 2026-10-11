@@ -16,11 +16,10 @@ public class FileStorageService
         if (file == null || file.Length == 0) return null;
         if (file.Length > maxBytes) return null;
 
-        var webRoot = _env.WebRootPath;
-        if (string.IsNullOrEmpty(webRoot))
-            webRoot = Path.Combine(_env.ContentRootPath, "wwwroot");
-
-        var targetDir = Path.Combine(webRoot, folder);
+        // Match the static-file mapping in Program.cs:
+        // write into <ContentRoot>/<folder>. On MonsterASP,
+        // ContentRootPath is the site folder; there's no nested wwwroot.
+        var targetDir = Path.Combine(_env.ContentRootPath, folder);
         Directory.CreateDirectory(targetDir);
 
         var ext = Path.GetExtension(file.FileName);

@@ -17,8 +17,6 @@ using System.Text.Json.Serialization;
 var builder = WebApplication.CreateBuilder(args);
 
 // ── Kestrel request body limit ────────────────────────────────
-// Default is ~28.6 MB. Raised to 33 MB to accommodate a 25 MB
-// file + base64 inflation (~33%) being posted through the hub.
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = 33_000_000;
@@ -142,34 +140,24 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 // ── Static files ─────────────────────────────────────────────
-// Ensure the physical folders exist before wiring the middleware.
-// On shared IIS hosts, ContentRootPath is the app folder
-// (D:\Deploy\site97704\source\Orbital), so wwwroot lives under it.
-var webRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
-Directory.CreateDirectory(webRoot);
-
-var avatarsDir = Path.Combine(webRoot, "avatars");
+// On MonsterASP, ContentRootPath IS the served site root
+// (D:\Sites\site97704\wwwroot). Do NOT append another "wwwroot".
+var avatarsDir = Path.Combine(app.Environment.ContentRootPath, "avatars");
 Directory.CreateDirectory(avatarsDir);
 
-// Diagnostic — logged once at startup. Tells you exactly which
-// folder the app is serving files from. Remove after you verify.
-app.Logger.LogInformation("WebRootPath   : {path}", webRoot);
-app.Logger.LogInformation("Avatars path  : {path}", avatarsDir);
-app.Logger.LogInformation("Environment   : {env}", app.Environment.EnvironmentName);
+app.Logger.LogInformation("ContentRoot : {path}", app.Environment.ContentRootPath);
+app.Logger.LogInformation("Avatars dir : {path}", avatarsDir);
+app.Logger.LogInformation("Environment : {env}", app.Environment.EnvironmentName);
 
-// Explicit mapping for /avatars/* so the URL is always served
-// from the same folder FileStorageService writes into. No
-// ambiguity about what WebRootPath resolves to.
 app.UseStaticFiles(new StaticFileOptions
 {
     FileProvider = new PhysicalFileProvider(avatarsDir),
     RequestPath = "/avatars"
 });
 
-// Default mapping for the rest of wwwroot (favicon, css, etc.).
 app.UseStaticFiles(new StaticFileOptions
 {
-    FileProvider = new PhysicalFileProvider(webRoot),
+    FileProvider = new PhysicalFileProvider(app.Environment.ContentRootPath),
     RequestPath = ""
 });
 
@@ -188,7 +176,6 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-// Map SignalR Hub endpoint
 app.MapHub<ChatHub>("/hubs/chat");
 
 app.Run();
