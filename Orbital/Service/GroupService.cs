@@ -199,6 +199,7 @@ public class GroupService
             m.User.DisplayName,
             m.User.AvatarUrl,
             m.User.CreatedAt
+            , m.User.Email
         )).ToList();
 
         return new GroupDetailDto(
