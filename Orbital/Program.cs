@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Orbital;
@@ -32,7 +33,6 @@ builder.Services.AddTransient<IConfigureOptions<SwaggerGenOptions>, ConfigureSwa
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
     {
-        // Enums (FriendshipStatus, CallType, CallStatus) serialize as strings in API responses
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     });
 
@@ -80,16 +80,13 @@ builder.Services
             IssuerSigningKey = new SymmetricSecurityKey(
                 Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!)),
 
-            // Allow 2 minutes of clock drift between server and client.
-            // Zero skew causes premature 401s when client clocks are
-            // slightly behind. 2 min is the common baseline.
             ClockSkew = TimeSpan.FromMinutes(2),
 
             NameClaimType = ClaimTypes.Name,
             RoleClaimType = ClaimTypes.Role
         };
 
-        // CRITICAL FOR SIGNALR: Intercept token from query string on WebSocket upgrade
+        // SignalR: token from query string on WebSocket upgrade
         options.Events = new JwtBearerEvents
         {
             OnMessageReceived = context =>
@@ -125,16 +122,12 @@ builder.Services.AddScoped<UserService>();
 builder.Services.AddSingleton<PresenceTracker>();
 
 // 7. SignalR
-// Raised MaximumReceiveMessageSize from the default of 32 KB to 30 MB
-// so attachments (images, files, media) can be sent over the hub. The
-// default limit silently kills the connection on any payload larger
-// than 32 KB.
 builder.Services.AddSignalR(options =>
 {
     options.MaximumReceiveMessageSize = 30 * 1024 * 1024; // 30 MB
 });
 
-// 8. CORS — permissive for dev, tighten before production
+// 8. CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -148,23 +141,50 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Pipeline Configuration (Strict Order Matters)
+// ── Static files ─────────────────────────────────────────────
+// Ensure the physical folders exist before wiring the middleware.
+// On shared IIS hosts, ContentRootPath is the app folder
+// (D:\Deploy\site97704\source\Orbital), so wwwroot lives under it.
+var webRoot = Path.Combine(app.Environment.ContentRootPath, "wwwroot");
+Directory.CreateDirectory(webRoot);
+
+var avatarsDir = Path.Combine(webRoot, "avatars");
+Directory.CreateDirectory(avatarsDir);
+
+// Diagnostic — logged once at startup. Tells you exactly which
+// folder the app is serving files from. Remove after you verify.
+app.Logger.LogInformation("WebRootPath   : {path}", webRoot);
+app.Logger.LogInformation("Avatars path  : {path}", avatarsDir);
+app.Logger.LogInformation("Environment   : {env}", app.Environment.EnvironmentName);
+
+// Explicit mapping for /avatars/* so the URL is always served
+// from the same folder FileStorageService writes into. No
+// ambiguity about what WebRootPath resolves to.
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(avatarsDir),
+    RequestPath = "/avatars"
+});
+
+// Default mapping for the rest of wwwroot (favicon, css, etc.).
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new PhysicalFileProvider(webRoot),
+    RequestPath = ""
+});
+
+// Pipeline Configuration
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-// Redirect HTTP → HTTPS. Must run before static files and endpoints.
 app.UseHttpsRedirection();
-
-// CORS must sit before Authentication & Authorization
 app.UseCors("AllowAll");
 
 app.UseAuthentication();
 app.UseAuthorization();
-
-app.UseStaticFiles();
 
 app.MapControllers();
 
