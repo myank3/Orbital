@@ -21,4 +21,6 @@ public class DirectMessage
 
     public string RecipientId { get; set; } = string.Empty;
     public ApplicationUser Recipient { get; set; } = null!;
+    public bool HiddenForSender { get; set; }
+    public bool HiddenForRecipient { get; set; }
 }
