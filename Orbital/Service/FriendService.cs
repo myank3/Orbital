@@ -208,4 +208,21 @@ public class FriendService
         await _db.SaveChangesAsync();
         return (true, null);
     }
+
+    /// <summary>
+    /// Returns the IDs of all users the caller has blocked.
+    /// Only returns rows where the caller was the one who initiated the
+    /// block (Status == Blocked and RequesterId == userId). If the other
+    /// user blocked them instead, that user does not appear here.
+    /// </summary>
+    public async Task<List<string>> GetBlockedUserIdsAsync(string userId)
+    {
+        return await _db.Friendships
+            .AsNoTracking()
+            .Where(f =>
+                f.RequesterId == userId &&
+                f.Status == FriendshipStatus.Blocked)
+            .Select(f => f.AddresseeId)
+            .ToListAsync();
+    }
 }
