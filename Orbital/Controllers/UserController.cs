@@ -52,6 +52,23 @@ public class UserController : ControllerBase
     }
 
     /// <summary>
+    /// Search all users (excluding the caller) by display name, handle, or email.
+    /// Requires at least 2 characters. Returns up to 30 results by default.
+    /// </summary>
+    [HttpGet("search")]
+    [ProducesResponseType(typeof(List<UserProfileDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> SearchUsers(
+        [FromQuery] string q,
+        [FromQuery] int take = 30)
+    {
+        if (string.IsNullOrWhiteSpace(q) || q.Trim().Length < 2)
+            return Ok(new List<UserProfileDto>());
+
+        var results = await _userService.SearchUsersAsync(CurrentUserId, q.Trim(), take);
+        return Ok(results);
+    }
+
+    /// <summary>
     /// Update display name or avatar URL.
     /// </summary>
     [HttpPut("profile")]

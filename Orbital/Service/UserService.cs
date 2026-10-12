@@ -32,6 +32,45 @@ public class UserService
         );
     }
 
+    /// <summary>
+    /// Search all users (excluding the caller) by display name, handle, or email.
+    /// Case-insensitive substring match. Returns at most 30 results.
+    /// </summary>
+    public async Task<List<UserProfileDto>> SearchUsersAsync(
+        string excludeUserId,
+        string query,
+        int take = 30)
+    {
+        var term = query.Trim().ToLowerInvariant();
+        if (term.Length < 2)
+            return new List<UserProfileDto>();
+
+        var limit = Math.Clamp(take, 1, 50);
+
+        var users = await _db.Users
+            .AsNoTracking()
+            .Where(u =>
+                u.Id != excludeUserId &&
+                ((u.UserHandle != null && u.UserHandle.ToLower().Contains(term)) ||
+                 (u.DisplayName != null && u.DisplayName.ToLower().Contains(term)) ||
+                 (u.Email != null && u.Email.ToLower().Contains(term))))
+            .OrderBy(u => u.DisplayName)
+            .Take(limit)
+            .ToListAsync();
+
+        return users
+            .Select(user => new UserProfileDto(
+                user.Id,
+                user.UserHandle,
+                $"{user.UserHandle}@{user.Realm}",
+                user.DisplayName,
+                user.AvatarUrl,
+                user.CreatedAt,
+                user.Email
+            ))
+            .ToList();
+    }
+
     public async Task<UserProfileDto?> UpdateProfileAsync(string userId, UpdateProfileDto dto)
     {
         var user = await _db.Users.FindAsync(userId);
