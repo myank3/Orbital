@@ -63,10 +63,18 @@ public class DirectMessageService
         long? beforeId = null,
         int take = 50)
     {
+        // Only show messages the caller hasn't hidden for themselves.
+        // Sender-side hidden: currentUserId sent it and set HiddenForSender.
+        // Recipient-side hidden: currentUserId received it and set HiddenForRecipient.
         var query = _db.DirectMessages
             .AsNoTracking()
-            .Where(m => (m.SenderId == currentUserId && m.RecipientId == targetUserId) ||
-                        (m.SenderId == targetUserId && m.RecipientId == currentUserId));
+            .Where(m =>
+                (m.SenderId == currentUserId &&
+                 m.RecipientId == targetUserId &&
+                 !m.HiddenForSender) ||
+                (m.SenderId == targetUserId &&
+                 m.RecipientId == currentUserId &&
+                 !m.HiddenForRecipient));
 
         if (beforeId.HasValue)
         {
@@ -96,7 +104,11 @@ public class DirectMessageService
     public async Task MarkAsReadAsync(string currentUserId, string senderId)
     {
         var unreadMessages = await _db.DirectMessages
-            .Where(m => m.RecipientId == currentUserId && m.SenderId == senderId && !m.IsRead)
+            .Where(m =>
+                m.RecipientId == currentUserId &&
+                m.SenderId == senderId &&
+                !m.IsRead &&
+                !m.HiddenForRecipient)
             .ToListAsync();
 
         if (unreadMessages.Count > 0)
@@ -109,6 +121,10 @@ public class DirectMessageService
         }
     }
 
+    /// <summary>
+    /// WhatsApp-style "Delete for me": hides the message from the caller's own view.
+    /// The other participant keeps their copy. Works on any message the caller is a part of.
+    /// </summary>
     public async Task<(bool Success, string? Error)> DeleteMessageAsync(
         string userId,
         long messageId)
@@ -117,36 +133,70 @@ public class DirectMessageService
         if (message == null)
             return (false, "Message not found.");
 
-        if (message.SenderId != userId)
-            return (false, "You can only delete your own messages.");
+        if (message.SenderId == userId)
+        {
+            if (message.HiddenForSender)
+                return (true, null); // already hidden, idempotent
+            message.HiddenForSender = true;
+        }
+        else if (message.RecipientId == userId)
+        {
+            if (message.HiddenForRecipient)
+                return (true, null);
+            message.HiddenForRecipient = true;
+        }
+        else
+        {
+            return (false, "You are not a participant in this conversation.");
+        }
 
-        _db.DirectMessages.Remove(message);
         await _db.SaveChangesAsync();
-
         return (true, null);
     }
 
-    // ─── NEW: Clear Conversation ────────────────────────────────
+    /// <summary>
+    /// WhatsApp-style "Delete for everyone": only the original sender may
+    /// remove the message for both sides. Hard-deletes the row.
+    /// </summary>
+    public async Task<(bool Success, string? Error)> DeleteForEveryoneAsync(
+        string userId,
+        long messageId)
+    {
+        var message = await _db.DirectMessages.FindAsync(messageId);
+        if (message == null)
+            return (false, "Message not found.");
+
+        if (message.SenderId != userId)
+            return (false, "You can only delete your own messages for everyone.");
+
+        _db.DirectMessages.Remove(message);
+        await _db.SaveChangesAsync();
+        return (true, null);
+    }
 
     /// <summary>
-    /// Deletes every message between the current user and the target user,
-    /// in both directions. Removes the conversation for both sides.
+    /// WhatsApp-style "Clear chat": hides every message between the caller and
+    /// the target user from the caller's view only. The other person keeps their copy.
     /// </summary>
     public async Task<(bool Success, string? Error)> ClearConversationAsync(
         string userId,
         string targetUserId)
     {
-        var messages = await _db.DirectMessages
+        // Sender-side: caller sent these → set HiddenForSender
+        await _db.DirectMessages
             .Where(m =>
-                (m.SenderId == userId && m.RecipientId == targetUserId) ||
-                (m.SenderId == targetUserId && m.RecipientId == userId))
-            .ToListAsync();
+                m.SenderId == userId &&
+                m.RecipientId == targetUserId &&
+                !m.HiddenForSender)
+            .ExecuteUpdateAsync(s => s.SetProperty(m => m.HiddenForSender, true));
 
-        if (messages.Count == 0)
-            return (true, null); // nothing to delete, still success
-
-        _db.DirectMessages.RemoveRange(messages);
-        await _db.SaveChangesAsync();
+        // Recipient-side: caller received these → set HiddenForRecipient
+        await _db.DirectMessages
+            .Where(m =>
+                m.SenderId == targetUserId &&
+                m.RecipientId == userId &&
+                !m.HiddenForRecipient)
+            .ExecuteUpdateAsync(s => s.SetProperty(m => m.HiddenForRecipient, true));
 
         return (true, null);
     }

@@ -61,7 +61,8 @@ public class DirectMessageController : ControllerBase
     }
 
     /// <summary>
-    /// Delete your own message.
+    /// WhatsApp-style "Delete for me": hides the message from the caller's own
+    /// view only. The other participant keeps their copy.
     /// </summary>
     [HttpDelete("{messageId:long}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -73,14 +74,29 @@ public class DirectMessageController : ControllerBase
         if (!success)
             return BadRequest(new { message = error });
 
-        return Ok(new { message = "Deleted." });
+        return Ok(new { message = "Deleted for you." });
     }
 
-    // ─── NEW: Clear conversation ────────────────────────────────
+    /// <summary>
+    /// WhatsApp-style "Delete for everyone": removes the message for both
+    /// sides. Only the original sender may call this.
+    /// </summary>
+    [HttpDelete("{messageId:long}/everyone")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> DeleteForEveryone(long messageId)
+    {
+        var (success, error) = await _dmService.DeleteForEveryoneAsync(
+            CurrentUserId, messageId);
+        if (!success)
+            return BadRequest(new { message = error });
+
+        return Ok(new { message = "Deleted for everyone." });
+    }
 
     /// <summary>
-    /// Delete every message between the current user and the target user.
-    /// Removes the conversation for both sides (hard delete).
+    /// WhatsApp-style "Clear chat": hides every message between the caller
+    /// and the target user from the caller's view only.
     /// </summary>
     [HttpDelete("conversation/{targetUserId}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -91,6 +107,6 @@ public class DirectMessageController : ControllerBase
         if (!success)
             return BadRequest(new { message = error });
 
-        return Ok(new { message = "Conversation cleared." });
+        return Ok(new { message = "Chat cleared for you." });
     }
 }
