@@ -142,11 +142,8 @@ public class FriendService
             .ToListAsync();
     }
 
-    // ─── NEW: Unfriend and Block ────────────────────────────────
-
     /// <summary>
-    /// Removes an accepted friendship. Works for either direction —
-    /// you can unfriend someone you accepted, or someone who added you.
+    /// Removes an accepted friendship. Works for either direction.
     /// </summary>
     public async Task<(bool Success, string? Error)> UnfriendAsync(
         string userId,
@@ -166,10 +163,9 @@ public class FriendService
     }
 
     /// <summary>
-    /// Toggles the friendship row into (or out of) the Blocked state.
-    /// Blocking preserves the row so the SendRequestAsync guard can
-    /// refuse to re-add the pair. Unblocking reverts to Pending so
-    /// either side can send a fresh request.
+    /// Block or unblock.
+    ///  - Block: flips the row to Blocked (creates one if none exists).
+    ///  - Unblock: deletes the row entirely so either side can send a fresh request.
     /// </summary>
     public async Task<(bool Success, string? Error)> SetBlockedAsync(
         string userId,
@@ -186,7 +182,7 @@ public class FriendService
         if (friendship == null)
         {
             if (!blocked)
-                return (true, null); // unblock with no existing row = no-op
+                return (true, null); // unblock with no row = no-op
 
             friendship = new Friendship
             {
@@ -196,61 +192,76 @@ public class FriendService
                 CreatedAt = DateTime.UtcNow
             };
             await _db.Friendships.AddAsync(friendship);
+            await _db.SaveChangesAsync();
+            return (true, null);
+        }
+
+        if (blocked)
+        {
+            friendship.Status = FriendshipStatus.Blocked;
+            friendship.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
         }
         else
         {
-            friendship.Status = blocked
-                ? FriendshipStatus.Blocked
-                : FriendshipStatus.Pending;
-            friendship.UpdatedAt = DateTime.UtcNow;
+            // Unblock = delete row so future friend requests aren't blocked
+            // by a phantom Pending row.
+            _db.Friendships.Remove(friendship);
+            await _db.SaveChangesAsync();
         }
 
-        await _db.SaveChangesAsync();
         return (true, null);
     }
 
     /// <summary>
-    /// Returns the IDs of all users the caller has blocked.
-    /// Only returns rows where the caller was the one who initiated the
-    /// block (Status == Blocked and RequesterId == userId). If the other
-    /// user blocked them instead, that user does not appear here.
-    /// </summary>
-    /// /// <summary>
     /// Returns full profiles of everyone the caller has blocked.
-    /// Only returns rows where the caller initiated the block.
+    /// Matches either side of the friendship row, because the original
+    /// friend request might have come from either person.
     /// </summary>
     public async Task<List<UserProfileDto>> GetBlockedUsersAsync(string userId)
     {
         var blocked = await _db.Friendships
             .AsNoTracking()
+            .Include(f => f.Requester)
             .Include(f => f.Addressee)
             .Where(f =>
-                f.RequesterId == userId &&
+                (f.RequesterId == userId || f.AddresseeId == userId) &&
                 f.Status == FriendshipStatus.Blocked)
             .OrderByDescending(f => f.UpdatedAt ?? f.CreatedAt)
             .ToListAsync();
 
-        return blocked
-            .Where(f => f.Addressee != null)
-            .Select(f => new UserProfileDto(
-                f.Addressee.Id,
-                f.Addressee.UserHandle,
-                $"{f.Addressee.UserHandle}@{f.Addressee.Realm}",
-                f.Addressee.DisplayName,
-                f.Addressee.AvatarUrl,
-                f.Addressee.CreatedAt,
-                f.Addressee.Email
-            ))
-            .ToList();
+        var result = new List<UserProfileDto>();
+        foreach (var f in blocked)
+        {
+            var other = f.RequesterId == userId ? f.Addressee : f.Requester;
+            if (other == null) continue;
+
+            result.Add(new UserProfileDto(
+                other.Id,
+                other.UserHandle,
+                $"{other.UserHandle}@{other.Realm}",
+                other.DisplayName,
+                other.AvatarUrl,
+                other.CreatedAt,
+                other.Email
+            ));
+        }
+
+        return result;
     }
+
+    /// <summary>
+    /// Returns IDs of users either side of a Blocked row involving the caller.
+    /// Used for DM filtering.
+    /// </summary>
     public async Task<List<string>> GetBlockedUserIdsAsync(string userId)
     {
         return await _db.Friendships
             .AsNoTracking()
             .Where(f =>
-                f.RequesterId == userId &&
+                (f.RequesterId == userId || f.AddresseeId == userId) &&
                 f.Status == FriendshipStatus.Blocked)
-            .Select(f => f.AddresseeId)
+            .Select(f => f.RequesterId == userId ? f.AddresseeId : f.RequesterId)
             .ToListAsync();
     }
 }

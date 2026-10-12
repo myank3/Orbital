@@ -73,8 +73,6 @@ public class FriendshipController : ControllerBase
         return Ok(pending);
     }
 
-    // ─── NEW: Unfriend, Block, Unblock ──────────────────────────
-
     /// <summary>
     /// Remove an existing friendship. Either side can unfriend.
     /// </summary>
@@ -104,6 +102,7 @@ public class FriendshipController : ControllerBase
 
         return Ok(new { message = "Blocked." });
     }
+
     /// <summary>
     /// Returns the full profiles of everyone the caller has blocked.
     /// </summary>
@@ -114,8 +113,9 @@ public class FriendshipController : ControllerBase
         var blocked = await _friendService.GetBlockedUsersAsync(CurrentUserId);
         return Ok(blocked);
     }
+
     /// <summary>
-    /// Unblock a previously blocked user. Their friendship reverts to Pending.
+    /// Unblock a previously blocked user. Row is deleted so a new request can be sent.
     /// </summary>
     [HttpPost("unblock/{targetUserId}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
