@@ -138,7 +138,7 @@ builder.Services.AddScoped<GroupService>();
 builder.Services.AddScoped<CallService>();
 builder.Services.AddScoped<UserService>();
 builder.Services.AddSingleton<PresenceTracker>();
-
+builder.Services.AddHostedService<StaleCallCleanupService>();
 // ── 9. CORS Policy ─────────────────────────────────────────────────────────
 builder.Services.AddCors(options =>
 {

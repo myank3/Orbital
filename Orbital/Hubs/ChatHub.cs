@@ -1,7 +1,10 @@
 ﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
+using Orbital.Data;
 using Orbital.DTOs;
+using Orbital.Models;
 using Orbital.Service;
 
 namespace Orbital.Hubs;
@@ -12,15 +15,18 @@ public class ChatHub : Hub
     private readonly PresenceTracker _presenceTracker;
     private readonly DirectMessageService _dmService;
     private readonly GroupService _groupService;
+    private readonly ApplicationDbContext _db;
 
     public ChatHub(
         PresenceTracker presenceTracker,
         DirectMessageService dmService,
-        GroupService groupService)
+        GroupService groupService,
+        ApplicationDbContext db)
     {
         _presenceTracker = presenceTracker;
         _dmService = dmService;
         _groupService = groupService;
+        _db = db;
     }
 
     private string UserId => Context.User?.FindFirstValue(ClaimTypes.NameIdentifier)
@@ -59,9 +65,52 @@ public class ChatHub : Hub
     {
         var isCompletelyOffline = await _presenceTracker.UserDisconnected(UserId, Context.ConnectionId);
 
+        // If the user has closed all tabs/connections, terminate any stuck calls
         if (isCompletelyOffline)
         {
             await Clients.Others.SendAsync("UserStatusChanged", new { userId = UserId, isOnline = false });
+
+            // ──────────────────────────────────────────────────────────
+            // Instant Call Cleanup on Disconnect:
+            // Find any active or ringing session where the disconnecting
+            // user was a participant and mark it ended immediately.
+            // ──────────────────────────────────────────────────────────
+            try
+            {
+                var activeOrRingingSessions = await _db.CallSessions
+                    .Where(c => c.EndedAt == null &&
+                                (c.InitiatorId == UserId || c.PeerId == UserId) &&
+                                (c.Status == CallStatus.Ringing || c.Status == CallStatus.Active))
+                    .ToListAsync();
+
+                if (activeOrRingingSessions.Count > 0)
+                {
+                    var now = DateTime.UtcNow;
+                    foreach (var session in activeOrRingingSessions)
+                    {
+                        session.EndedAt = now;
+                        session.Status = CallStatus.Ended;
+
+                        // Inform the other party that their peer disconnected
+                        var peerToNotify = session.InitiatorId == UserId ? session.PeerId : session.InitiatorId;
+                        if (!string.IsNullOrEmpty(peerToNotify))
+                        {
+                            await Clients.User(peerToNotify).SendAsync("CallTerminated", new
+                            {
+                                terminatedBy = UserId,
+                                sessionId = session.Id,
+                                reason = "Peer disconnected."
+                            });
+                        }
+                    }
+
+                    await _db.SaveChangesAsync();
+                }
+            }
+            catch
+            {
+                // Background service handles DB cleanup if disconnect DB write fails
+            }
         }
 
         await base.OnDisconnectedAsync(exception);

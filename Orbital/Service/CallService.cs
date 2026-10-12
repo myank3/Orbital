@@ -22,20 +22,21 @@ public class CallService
     {
         // ──────────────────────────────────────────────────────────
         // Stale session sweep
-        // Any session still open after this window is presumed abandoned
-        // (client crashed, tab closed without cleanup, network dropped).
-        // Close them so they don't permanently block new calls.
+        // Rings time out after 2 minutes; active calls cut off after 4 hours.
+        // Prevents dirty disconnects/tab closes from permanently locking users.
         // ──────────────────────────────────────────────────────────
-        const int staleMinutes = 30;
-        var staleThreshold = DateTime.UtcNow.AddMinutes(-staleMinutes);
+        var now = DateTime.UtcNow;
+        var ringingCutoff = now.AddMinutes(-2);
+        var activeCutoff = now.AddHours(-4);
 
         var staleSessions = await _db.CallSessions
-            .Where(c => c.EndedAt == null && c.StartedAt < staleThreshold)
+            .Where(c => c.EndedAt == null &&
+                        ((c.Status == CallStatus.Ringing && c.StartedAt < ringingCutoff) ||
+                         (c.Status == CallStatus.Active && c.StartedAt < activeCutoff)))
             .ToListAsync();
 
         if (staleSessions.Count > 0)
         {
-            var now = DateTime.UtcNow;
             foreach (var stale in staleSessions)
             {
                 stale.EndedAt = now;
