@@ -173,7 +173,8 @@ public class AuthController : ControllerBase
         {
             HttpOnly = true,
             Secure = true,
-            SameSite = SameSiteMode.Strict
+            SameSite = SameSiteMode.None,
+            Path = "/",
         });
 
         return Ok(new { message = "Logged out successfully." });
@@ -232,14 +233,28 @@ public class AuthController : ControllerBase
         });
     }
 
+    /// <summary>
+    /// Cross-domain refresh cookie.
+    ///
+    /// SameSite=None is required because the frontend lives on
+    /// orbitalhq.vercel.app and this API lives on orbital.runasp.net.
+    /// Strict/Lax cookies are never sent on cross-site requests, which
+    /// would break silent token refresh.
+    ///
+    /// `Secure=true` is mandatory when SameSite=None, and the API is
+    /// always served over HTTPS, so that's satisfied.
+    ///
+    /// `Path=/` ensures the cookie is sent on every API endpoint.
+    /// </summary>
     private void AppendRefreshTokenCookie(string token, DateTime expires)
     {
         Response.Cookies.Append("refreshToken", token, new CookieOptions
         {
             HttpOnly = true,
             Secure = true,
-            SameSite = SameSiteMode.Strict,
-            Expires = expires
+            SameSite = SameSiteMode.None,
+            Path = "/",
+            Expires = expires,
         });
     }
 }
