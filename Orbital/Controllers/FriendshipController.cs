@@ -104,7 +104,16 @@ public class FriendshipController : ControllerBase
 
         return Ok(new { message = "Blocked." });
     }
-
+    /// <summary>
+    /// Returns the full profiles of everyone the caller has blocked.
+    /// </summary>
+    [HttpGet("blocked")]
+    [ProducesResponseType(typeof(List<UserProfileDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetBlockedUsers()
+    {
+        var blocked = await _friendService.GetBlockedUsersAsync(CurrentUserId);
+        return Ok(blocked);
+    }
     /// <summary>
     /// Unblock a previously blocked user. Their friendship reverts to Pending.
     /// </summary>

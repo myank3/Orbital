@@ -215,6 +215,34 @@ public class FriendService
     /// block (Status == Blocked and RequesterId == userId). If the other
     /// user blocked them instead, that user does not appear here.
     /// </summary>
+    /// /// <summary>
+    /// Returns full profiles of everyone the caller has blocked.
+    /// Only returns rows where the caller initiated the block.
+    /// </summary>
+    public async Task<List<UserProfileDto>> GetBlockedUsersAsync(string userId)
+    {
+        var blocked = await _db.Friendships
+            .AsNoTracking()
+            .Include(f => f.Addressee)
+            .Where(f =>
+                f.RequesterId == userId &&
+                f.Status == FriendshipStatus.Blocked)
+            .OrderByDescending(f => f.UpdatedAt ?? f.CreatedAt)
+            .ToListAsync();
+
+        return blocked
+            .Where(f => f.Addressee != null)
+            .Select(f => new UserProfileDto(
+                f.Addressee.Id,
+                f.Addressee.UserHandle,
+                $"{f.Addressee.UserHandle}@{f.Addressee.Realm}",
+                f.Addressee.DisplayName,
+                f.Addressee.AvatarUrl,
+                f.Addressee.CreatedAt,
+                f.Addressee.Email
+            ))
+            .ToList();
+    }
     public async Task<List<string>> GetBlockedUserIdsAsync(string userId)
     {
         return await _db.Friendships
