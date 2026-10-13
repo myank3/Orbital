@@ -83,7 +83,6 @@ public class AuthService
 
         await _userManager.AddToRoleAsync(user, "User");
 
-        // Send email confirmation link
         try
         {
             var token = await _userManager.GenerateEmailConfirmationTokenAsync(user);
@@ -91,16 +90,13 @@ public class AuthService
             var html = _emailTemplate.GenerateEmailConfirmationTemplate(user.UserHandle, link);
             await _emailService.SendEmailAsync(user.Email!, "Verify your Orbit handle", html);
         }
-        catch
-        {
-            // Fail silently on email transport errors so user record is preserved
-        }
+        catch { }
 
         return (true, null);
     }
 
     // =========================================================
-    // 2. LOGIN (Strict Email Verification Check)
+    // 2. LOGIN
     // =========================================================
     public async Task<(bool Success, string? Error, InternalTokens? Tokens)> LoginAsync(LoginDto dto)
     {
@@ -120,15 +116,14 @@ public class AuthService
             user = await _db.Users.FirstOrDefaultAsync(u => u.UserHandle == handlePrefix && u.Realm == "orbit");
         }
 
-        // Constant-time check: verify user & password before inspecting verification state
         if (user == null || !await _userManager.CheckPasswordAsync(user, dto.Password))
             return (false, "Invalid credentials.", null);
 
-        // Enforce email verification lock
         if (!user.EmailConfirmed)
             return (false, "Email is not verified. Please verify your email before logging in.", null);
 
-        var tokens = await GenerateAuthTokensAsync(user);
+        // Rotate session: this login invalidates any other device
+        var tokens = await IssueNewSessionAsync(user);
         return (true, null, tokens);
     }
 
@@ -162,12 +157,13 @@ public class AuthService
         if (user == null)
             return (false, "User associated with token no longer exists.", null);
 
-        var tokens = await GenerateAuthTokensAsync(user);
+        // Refresh does NOT rotate the session — it's the same login continuing.
+        var tokens = await ContinueSessionAsync(user);
         return (true, null, tokens);
     }
 
     // =========================================================
-    // 3b. REFRESH TOKENS (by value — cookie-only, no access token)
+    // 3b. REFRESH TOKENS (cookie-only, no access token)
     // =========================================================
     public async Task<(bool Success, string? Error, InternalTokens? Tokens)> RefreshTokensByValueAsync(string refreshToken)
     {
@@ -189,11 +185,11 @@ public class AuthService
         if (user == null)
             return (false, "User associated with token no longer exists.", null);
 
-        // Rotate: mark used, issue new pair
         storedToken.IsUsed = true;
         await _db.SaveChangesAsync();
 
-        var tokens = await GenerateAuthTokensAsync(user);
+        // Refresh does NOT rotate the session — it's the same login continuing.
+        var tokens = await ContinueSessionAsync(user);
         return (true, null, tokens);
     }
 
@@ -297,6 +293,36 @@ public class AuthService
     }
 
     // =========================================================
+    // PUBLIC — Issue a fresh session (used by LoginAsync and Google callback)
+    // Rotates CurrentSessionId, which invalidates any other device currently
+    // holding a token with the old session ID.
+    // =========================================================
+    public async Task<InternalTokens> IssueNewSessionAsync(ApplicationUser user)
+    {
+        var sessionId = Guid.NewGuid().ToString("N");
+        user.CurrentSessionId = sessionId;
+        await _userManager.UpdateAsync(user);
+        return await GenerateAuthTokensAsync(user, sessionId);
+    }
+
+    // =========================================================
+    // PRIVATE — Continue an existing session on token refresh.
+    // Does NOT rotate the session ID — refresh is the same login continuing.
+    // If a legacy user has no session yet, one is created now.
+    // =========================================================
+    private async Task<InternalTokens> ContinueSessionAsync(ApplicationUser user)
+    {
+        var sessionId = user.CurrentSessionId;
+        if (string.IsNullOrEmpty(sessionId))
+        {
+            sessionId = Guid.NewGuid().ToString("N");
+            user.CurrentSessionId = sessionId;
+            await _userManager.UpdateAsync(user);
+        }
+        return await GenerateAuthTokensAsync(user, sessionId);
+    }
+
+    // =========================================================
     // PRIVATE HELPERS & TOKEN GENERATION
     // =========================================================
     private static bool IsValidEmail(string email)
@@ -321,10 +347,7 @@ public class AuthService
         return $"{frontendUrl}/reset-password?email={encodedEmail}&token={encodedToken}";
     }
 
-    // PUBLIC so AuthController.GoogleCallback can issue a JWT for an
-    // externally-authenticated user without going through LoginAsync
-    // (which requires a password).
-    public async Task<InternalTokens> GenerateAuthTokensAsync(ApplicationUser user)
+    private async Task<InternalTokens> GenerateAuthTokensAsync(ApplicationUser user, string sessionId)
     {
         var jwtId = Guid.NewGuid().ToString();
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["Jwt:Key"]!));
@@ -340,7 +363,8 @@ public class AuthService
             new(ClaimTypes.NameIdentifier, user.Id),
             new(ClaimTypes.Name, $"{user.UserHandle}@{user.Realm}"),
             new("handle", user.UserHandle),
-            new("realm", user.Realm)
+            new("realm", user.Realm),
+            new("session_id", sessionId)
         };
 
         foreach (var role in roles)
@@ -359,7 +383,8 @@ public class AuthService
         var securityToken = tokenHandler.CreateToken(tokenDescriptor);
         var accessToken = tokenHandler.WriteToken(securityToken);
 
-        var refreshTokenExpiry = DateTime.UtcNow.AddDays(7);
+        // Refresh token: 90 days so the user stays logged in until they log out
+        var refreshTokenExpiry = DateTime.UtcNow.AddDays(90);
         var refreshTokenString = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
 
         var refreshToken = new RefreshToken

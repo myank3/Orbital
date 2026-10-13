@@ -13,6 +13,8 @@ namespace Orbital.Models
         public string DisplayName { get; set; } = string.Empty;
 
         public string? AvatarUrl { get; set; }
+        public string? CurrentSessionId { get; set; }
+
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

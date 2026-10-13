@@ -44,6 +44,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
             entity.Property(u => u.DisplayName)
                   .IsRequired()
                   .HasMaxLength(100);
+
+            entity.Property(u => u.CurrentSessionId)
+                  .HasMaxLength(100);
         });
 
         // -------------------------------------------------------------
@@ -68,7 +71,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
         builder.Entity<Friendship>(entity =>
         {
             entity.HasKey(f => f.Id);
-
+            entity.Property(f => f.BlockedById).HasMaxLength(450);
             entity.HasIndex(f => new { f.RequesterId, f.AddresseeId })
                   .IsUnique();
 

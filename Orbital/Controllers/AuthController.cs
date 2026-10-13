@@ -131,7 +131,8 @@ public class AuthController : ControllerBase
         await HttpContext.SignOutAsync(IdentityConstants.ExternalScheme);
 
         // Issue our own JWT
-        var tokens = await _authService.GenerateAuthTokensAsync(user);
+        var tokens = await _authService.IssueNewSessionAsync(user);
+
 
         // Same refresh cookie path as password login
         AppendRefreshTokenCookie(tokens.RefreshToken, tokens.RefreshTokenExpiry);
