@@ -23,4 +23,6 @@ public class DirectMessage
     public ApplicationUser Recipient { get; set; } = null!;
     public bool HiddenForSender { get; set; }
     public bool HiddenForRecipient { get; set; }
+    public string? Ciphertext { get; set; }
+    public string? Nonce { get; set; }
 }

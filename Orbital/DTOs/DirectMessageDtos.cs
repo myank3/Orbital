@@ -2,18 +2,20 @@
 
 public record SendDirectMessageDto(
     string RecipientId,
-    string Content,
+    string? Ciphertext,
+    string? Nonce,
     string? MediaUrl,
-    int MediaType           // 0: None, 1: Image, 2: Video, 3: Audio, 4: Document
-);
-
+    int? MediaType
+); 
 public record DirectMessageDto(
     long Id,
     string SenderId,
     string RecipientId,
-    string Content,
+    string? Ciphertext,
+    string? Nonce,
+    string? Content,
     string? MediaUrl,
-    int MediaType,
+    int? MediaType,
     bool IsRead,
     DateTime SentAt
 );

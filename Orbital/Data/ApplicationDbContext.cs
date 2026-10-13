@@ -19,10 +19,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
     public DbSet<GroupMember> GroupMembers => Set<GroupMember>();
     public DbSet<GroupMessage> GroupMessages => Set<GroupMessage>();
     public DbSet<CallSession> CallSessions => Set<CallSession>();
+    public DbSet<UserPublicKey> UserPublicKeys => Set<UserPublicKey>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
-        // 1. Mandatory Identity configuration call
         base.OnModelCreating(builder);
 
         // -------------------------------------------------------------
@@ -30,7 +30,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
         // -------------------------------------------------------------
         builder.Entity<ApplicationUser>(entity =>
         {
-            // Unique composite index: guarantees no two users have the same user@orbit handle
             entity.HasIndex(u => new { u.UserHandle, u.Realm })
                   .IsUnique();
 
@@ -64,13 +63,12 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
         });
 
         // -------------------------------------------------------------
-        // 4. Friendship Configuration (Prevents SQL Server Cascade Cycles)
+        // 4. Friendship Configuration
         // -------------------------------------------------------------
         builder.Entity<Friendship>(entity =>
         {
             entity.HasKey(f => f.Id);
 
-            // Ensure no duplicate friend request rows between the same pair
             entity.HasIndex(f => new { f.RequesterId, f.AddresseeId })
                   .IsUnique();
 
@@ -95,6 +93,12 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
             entity.Property(dm => dm.Content)
                   .HasMaxLength(4000);
 
+            entity.Property(dm => dm.Ciphertext)
+                  .HasMaxLength(8000);
+
+            entity.Property(dm => dm.Nonce)
+                  .HasMaxLength(100);
+
             entity.HasOne(dm => dm.Sender)
                   .WithMany()
                   .HasForeignKey(dm => dm.SenderId)
@@ -105,7 +109,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
                   .HasForeignKey(dm => dm.RecipientId)
                   .OnDelete(DeleteBehavior.Restrict);
 
-            // Index for chronological message retrieval between two peers
             entity.HasIndex(dm => new { dm.SenderId, dm.RecipientId, dm.SentAt });
         });
 
@@ -128,7 +131,6 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
 
         builder.Entity<GroupMember>(entity =>
         {
-            // Composite key: a user can only belong to a group once
             entity.HasKey(gm => new { gm.GroupId, gm.UserId });
 
             entity.HasOne(gm => gm.Group)
@@ -162,12 +164,11 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
                   .HasForeignKey(gm => gm.SenderId)
                   .OnDelete(DeleteBehavior.Restrict);
 
-            // Index for fast group chat history scrolling
             entity.HasIndex(gm => new { gm.GroupId, gm.SentAt });
         });
 
         // -------------------------------------------------------------
-        // 8. CallSession Configuration (Voice & Video logs)
+        // 8. CallSession Configuration
         // -------------------------------------------------------------
         builder.Entity<CallSession>(entity =>
         {
@@ -187,6 +188,23 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
                   .WithMany()
                   .HasForeignKey(cs => cs.GroupId)
                   .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // -------------------------------------------------------------
+        // 9. UserPublicKey Configuration (E2EE)
+        // -------------------------------------------------------------
+        builder.Entity<UserPublicKey>(entity =>
+        {
+            entity.HasKey(k => k.UserId);
+
+            entity.Property(k => k.PublicKey)
+                  .IsRequired()
+                  .HasMaxLength(200);
+
+            entity.HasOne(k => k.User)
+                  .WithOne()
+                  .HasForeignKey<UserPublicKey>(k => k.UserId)
+                  .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

@@ -18,8 +18,15 @@ public class DirectMessageService
         string senderId,
         SendDirectMessageDto dto)
     {
-        if (string.IsNullOrWhiteSpace(dto.Content) && string.IsNullOrWhiteSpace(dto.MediaUrl))
+        // E2EE: accept an encrypted payload (ciphertext+nonce) or media-only.
+        var hasCiphertext = !string.IsNullOrWhiteSpace(dto.Ciphertext);
+        var hasMedia = !string.IsNullOrWhiteSpace(dto.MediaUrl);
+
+        if (!hasCiphertext && !hasMedia)
             return (false, "Message cannot be empty.", null);
+
+        if (hasCiphertext && string.IsNullOrWhiteSpace(dto.Nonce))
+            return (false, "Encrypted payload missing nonce.", null);
 
         var areFriends = await _db.Friendships.AnyAsync(f =>
             ((f.RequesterId == senderId && f.AddresseeId == dto.RecipientId) ||
@@ -33,11 +40,13 @@ public class DirectMessageService
         {
             SenderId = senderId,
             RecipientId = dto.RecipientId,
-            Content = dto.Content?.Trim() ?? string.Empty,
+            Content = string.Empty, // legacy column — unused for new rows
+            Ciphertext = dto.Ciphertext,
+            Nonce = dto.Nonce,
             MediaUrl = dto.MediaUrl,
-            MediaType = dto.MediaType,
+            MediaType = dto.MediaType ?? 0,
             IsRead = false,
-            SentAt = DateTime.UtcNow
+            SentAt = DateTime.UtcNow,
         };
 
         await _db.DirectMessages.AddAsync(message);
@@ -47,7 +56,9 @@ public class DirectMessageService
             message.Id,
             message.SenderId,
             message.RecipientId,
-            message.Content,
+            message.Ciphertext,
+            message.Nonce,
+            null, // never echo legacy Content back for a new message
             message.MediaUrl,
             message.MediaType,
             message.IsRead,
@@ -64,8 +75,6 @@ public class DirectMessageService
         int take = 50)
     {
         // Only show messages the caller hasn't hidden for themselves.
-        // Sender-side hidden: currentUserId sent it and set HiddenForSender.
-        // Recipient-side hidden: currentUserId received it and set HiddenForRecipient.
         var query = _db.DirectMessages
             .AsNoTracking()
             .Where(m =>
@@ -92,7 +101,12 @@ public class DirectMessageService
                 m.Id,
                 m.SenderId,
                 m.RecipientId,
-                m.Content,
+                m.Ciphertext,
+                m.Nonce,
+                // Legacy rows (pre-E2EE): return plaintext Content so the
+                // frontend can still render them. New rows have Ciphertext
+                // set and empty Content → return null.
+                string.IsNullOrEmpty(m.Ciphertext) ? m.Content : null,
                 m.MediaUrl,
                 m.MediaType,
                 m.IsRead,
@@ -123,7 +137,6 @@ public class DirectMessageService
 
     /// <summary>
     /// WhatsApp-style "Delete for me": hides the message from the caller's own view.
-    /// The other participant keeps their copy. Works on any message the caller is a part of.
     /// </summary>
     public async Task<(bool Success, string? Error)> DeleteMessageAsync(
         string userId,
@@ -136,7 +149,7 @@ public class DirectMessageService
         if (message.SenderId == userId)
         {
             if (message.HiddenForSender)
-                return (true, null); // already hidden, idempotent
+                return (true, null);
             message.HiddenForSender = true;
         }
         else if (message.RecipientId == userId)
@@ -176,13 +189,12 @@ public class DirectMessageService
 
     /// <summary>
     /// WhatsApp-style "Clear chat": hides every message between the caller and
-    /// the target user from the caller's view only. The other person keeps their copy.
+    /// the target user from the caller's view only.
     /// </summary>
     public async Task<(bool Success, string? Error)> ClearConversationAsync(
         string userId,
         string targetUserId)
     {
-        // Sender-side: caller sent these → set HiddenForSender
         await _db.DirectMessages
             .Where(m =>
                 m.SenderId == userId &&
@@ -190,7 +202,6 @@ public class DirectMessageService
                 !m.HiddenForSender)
             .ExecuteUpdateAsync(s => s.SetProperty(m => m.HiddenForSender, true));
 
-        // Recipient-side: caller received these → set HiddenForRecipient
         await _db.DirectMessages
             .Where(m =>
                 m.SenderId == targetUserId &&
