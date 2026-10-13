@@ -12,11 +12,9 @@ public class Friendship
 {
     public int Id { get; set; }
 
-    // Requester (who initiated)
     public string RequesterId { get; set; } = string.Empty;
     public ApplicationUser Requester { get; set; } = null!;
 
-    // Addressee (who received)
     public string AddresseeId { get; set; } = string.Empty;
     public ApplicationUser Addressee { get; set; } = null!;
 
@@ -24,4 +22,6 @@ public class Friendship
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
+
+    public string? BlockedById { get; set; }
 }

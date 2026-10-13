@@ -28,13 +28,18 @@ public class DirectMessageService
         if (hasCiphertext && string.IsNullOrWhiteSpace(dto.Nonce))
             return (false, "Encrypted payload missing nonce.", null);
 
-        var areFriends = await _db.Friendships.AnyAsync(f =>
-            ((f.RequesterId == senderId && f.AddresseeId == dto.RecipientId) ||
-             (f.RequesterId == dto.RecipientId && f.AddresseeId == senderId)) &&
-            f.Status == FriendshipStatus.Accepted);
+        var friendship = await _db.Friendships
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f =>
+                (f.RequesterId == senderId && f.AddresseeId == dto.RecipientId) ||
+                (f.RequesterId == dto.RecipientId && f.AddresseeId == senderId));
 
-        if (!areFriends)
+        if (friendship == null || friendship.Status != FriendshipStatus.Accepted)
             return (false, "You can only message confirmed friends.", null);
+
+        // Blocked either direction → refuse silently
+        if (friendship.BlockedById != null)
+            return (false, "You can't message this user.", null);
 
         var message = new DirectMessage
         {
