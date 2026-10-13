@@ -54,6 +54,7 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
         // -------------------------------------------------------------
         builder.Entity<RefreshToken>(entity =>
         {
+            entity.Property(rt => rt.SessionId).HasMaxLength(100);
             entity.HasKey(rt => rt.Id);
 
             entity.HasIndex(rt => rt.Token)

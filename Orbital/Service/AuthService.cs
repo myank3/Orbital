@@ -150,15 +150,22 @@ public class AuthService
             return (false, "Refresh token is invalid or expired.", null);
         }
 
-        storedToken.IsUsed = true;
-        await _db.SaveChangesAsync();
-
         var user = await _userManager.FindByIdAsync(userId);
         if (user == null)
             return (false, "User associated with token no longer exists.", null);
 
-        // Refresh does NOT rotate the session — it's the same login continuing.
-        var tokens = await ContinueSessionAsync(user);
+        // Reject if this refresh token belongs to a session that's no longer current.
+        // Happens when the user has logged in on another device since this token was issued.
+        if (!string.IsNullOrEmpty(storedToken.SessionId) &&
+            storedToken.SessionId != user.CurrentSessionId)
+        {
+            return (false, "You signed in on another device.", null);
+        }
+
+        storedToken.IsUsed = true;
+        await _db.SaveChangesAsync();
+
+        var tokens = await GenerateAuthTokensAsync(user, storedToken.SessionId ?? user.CurrentSessionId!);
         return (true, null, tokens);
     }
 
@@ -185,11 +192,17 @@ public class AuthService
         if (user == null)
             return (false, "User associated with token no longer exists.", null);
 
+        // Reject if this refresh token belongs to a session that's no longer current.
+        if (!string.IsNullOrEmpty(storedToken.SessionId) &&
+            storedToken.SessionId != user.CurrentSessionId)
+        {
+            return (false, "You signed in on another device.", null);
+        }
+
         storedToken.IsUsed = true;
         await _db.SaveChangesAsync();
 
-        // Refresh does NOT rotate the session — it's the same login continuing.
-        var tokens = await ContinueSessionAsync(user);
+        var tokens = await GenerateAuthTokensAsync(user, storedToken.SessionId ?? user.CurrentSessionId!);
         return (true, null, tokens);
     }
 
@@ -306,23 +319,6 @@ public class AuthService
     }
 
     // =========================================================
-    // PRIVATE — Continue an existing session on token refresh.
-    // Does NOT rotate the session ID — refresh is the same login continuing.
-    // If a legacy user has no session yet, one is created now.
-    // =========================================================
-    private async Task<InternalTokens> ContinueSessionAsync(ApplicationUser user)
-    {
-        var sessionId = user.CurrentSessionId;
-        if (string.IsNullOrEmpty(sessionId))
-        {
-            sessionId = Guid.NewGuid().ToString("N");
-            user.CurrentSessionId = sessionId;
-            await _userManager.UpdateAsync(user);
-        }
-        return await GenerateAuthTokensAsync(user, sessionId);
-    }
-
-    // =========================================================
     // PRIVATE HELPERS & TOKEN GENERATION
     // =========================================================
     private static bool IsValidEmail(string email)
@@ -392,6 +388,7 @@ public class AuthService
             Token = refreshTokenString,
             JwtId = jwtId,
             UserId = user.Id,
+            SessionId = sessionId,       // ← NEW: stamp the session this refresh token belongs to
             CreatedAt = DateTime.UtcNow,
             ExpiryDate = refreshTokenExpiry
         };

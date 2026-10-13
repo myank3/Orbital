@@ -9,6 +9,7 @@ public class RefreshToken
     public string JwtId { get; set; } = string.Empty; // Matches the JWT 'jti' claim
 
     public bool IsUsed { get; set; }
+    public string? SessionId { get; set; }
 
     public bool IsRevoked { get; set; }
 
