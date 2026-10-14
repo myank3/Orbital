@@ -187,48 +187,6 @@ app.UseHttpsRedirection();
 app.UseCors("AllowAll");
 app.UseAuthentication();
 
-// ── Single-device session enforcement ────────────────────────────────────
-app.Use(async (context, next) =>
-{
-    if (context.User?.Identity?.IsAuthenticated == true)
-    {
-        var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
-
-        // Auth endpoints and SignalR hubs are exempt
-        if (path.StartsWith("/api/auth/") || path.StartsWith("/hubs"))
-        {
-            await next();
-            return;
-        }
-
-        var userId = context.User.FindFirstValue(ClaimTypes.NameIdentifier);
-        var tokenSessionId = context.User.FindFirst("session_id")?.Value;
-
-        if (!string.IsNullOrEmpty(userId) && !string.IsNullOrEmpty(tokenSessionId))
-        {
-            var db = context.RequestServices.GetRequiredService<ApplicationDbContext>();
-            var currentSessionId = await db.Users
-                .AsNoTracking()
-                .Where(u => u.Id == userId)
-                .Select(u => u.CurrentSessionId)
-                .FirstOrDefaultAsync();
-
-            if (currentSessionId != null && currentSessionId != tokenSessionId)
-            {
-                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                context.Response.ContentType = "application/json";
-                await context.Response.WriteAsJsonAsync(new
-                {
-                    message = "You signed in on another device. Please log in again."
-                });
-                return;
-            }
-        }
-    }
-
-    await next();
-});
-
 app.UseAuthorization();
 
 app.MapControllers();
