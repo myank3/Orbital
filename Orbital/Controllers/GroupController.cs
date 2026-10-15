@@ -1,7 +1,9 @@
 ﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Orbital.DTOs;
+using Orbital.Hubs;
 using Orbital.Service;
 
 namespace Orbital.Controllers;
@@ -12,10 +14,12 @@ namespace Orbital.Controllers;
 public class GroupController : ControllerBase
 {
     private readonly GroupService _groupService;
+    private readonly IHubContext<ChatHub> _hub;
 
-    public GroupController(GroupService groupService)
+    public GroupController(GroupService groupService, IHubContext<ChatHub> hub)
     {
         _groupService = groupService;
+        _hub = hub;
     }
 
     private string CurrentUserId => User.FindFirstValue(ClaimTypes.NameIdentifier)!;
@@ -105,7 +109,32 @@ public class GroupController : ControllerBase
         return Ok(messages);
     }
 
-    // ─── NEW: Leave / Kick / Delete ─────────────────────────────
+    /// <summary>
+    /// Soft-delete a single group message for everyone. Only the original
+    /// sender or the group creator may delete. Broadcasts a
+    /// "GroupMessageDeleted" event to the group channel in real time.
+    /// </summary>
+    [HttpDelete("messages/{messageId:long}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> DeleteGroupMessage(long messageId)
+    {
+        var (success, error, groupId) = await _groupService
+            .DeleteGroupMessageForEveryoneAsync(CurrentUserId, messageId);
+
+        if (!success)
+            return BadRequest(new { message = error });
+
+        // Broadcast to everyone currently in this group's SignalR room.
+        // Format matches ChatHub.SendGroupMessage: $"group_{groupId}"
+        await _hub.Clients
+            .Group($"group_{groupId}")
+            .SendAsync("GroupMessageDeleted", groupId, messageId);
+
+        return Ok(new { message = "Message deleted." });
+    }
+
+    // ─── Leave / Kick / Delete group ────────────────────────────
 
     /// <summary>
     /// Leave a group (self-removal). If you are the last member, the

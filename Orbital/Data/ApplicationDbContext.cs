@@ -158,6 +158,10 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
             entity.Property(gm => gm.Content)
                   .HasMaxLength(4000);
 
+            // ← NEW: soft-delete columns
+            entity.Property(gm => gm.DeletedBy)
+                  .HasMaxLength(450);   // matches EF's default for a user-id FK column
+
             entity.HasOne(gm => gm.Group)
                   .WithMany(g => g.Messages)
                   .HasForeignKey(gm => gm.GroupId)
@@ -168,9 +172,11 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
                   .HasForeignKey(gm => gm.SenderId)
                   .OnDelete(DeleteBehavior.Restrict);
 
-            entity.HasIndex(gm => new { gm.GroupId, gm.SentAt });
-        });
+            // ← NEW: index for the "not deleted" filter we use in GetGroupMessagesAsync
+            entity.HasIndex(gm => new { gm.GroupId, gm.DeletedAt });
 
+            entity.HasIndex(gm => new { gm.GroupId, gm.SentAt });   // existing
+        });
         // -------------------------------------------------------------
         // 8. CallSession Configuration
         // -------------------------------------------------------------

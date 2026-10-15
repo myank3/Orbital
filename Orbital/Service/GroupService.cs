@@ -264,6 +264,9 @@ public class GroupService
     /// <summary>
     /// Returns paginated messages for a group channel.
     /// </summary>
+    /// <summary>
+    /// Returns paginated messages for a group channel.
+    /// </summary>
     public async Task<List<GroupMessageDto>> GetGroupMessagesAsync(
         int groupId,
         string userId,
@@ -279,7 +282,7 @@ public class GroupService
         var query = _db.GroupMessages
             .AsNoTracking()
             .Include(m => m.Sender)
-            .Where(m => m.GroupId == groupId);
+            .Where(m => m.GroupId == groupId && m.DeletedAt == null);   // ← the fix
 
         if (beforeId.HasValue)
         {
@@ -343,5 +346,38 @@ public class GroupService
 
         await _db.SaveChangesAsync();
         return (true, null);
+    }
+    // ─── NEW: Soft-delete a group message (sender or creator only) ──
+
+    /// <summary>
+    /// Soft-deletes a group message for everyone. Only the original sender
+    /// or the group creator may delete.
+    /// Returns the group id so the caller can broadcast to the right channel.
+    /// </summary>
+    public async Task<(bool Success, string? Error, int GroupId)> DeleteGroupMessageForEveryoneAsync(
+        string requestingUserId,
+        long messageId)
+    {
+        var message = await _db.GroupMessages
+            .Include(m => m.Group)
+            .FirstOrDefaultAsync(m => m.Id == messageId);
+
+        if (message == null)
+            return (false, "Message not found.", 0);
+
+        if (message.DeletedAt != null)
+            return (false, "Message already deleted.", message.GroupId);
+
+        var isSender = message.SenderId == requestingUserId;
+        var isCreator = message.Group.CreatedById == requestingUserId;
+
+        if (!isSender && !isCreator)
+            return (false, "You can only delete your own messages.", message.GroupId);
+
+        message.DeletedAt = DateTime.UtcNow;
+        message.DeletedBy = requestingUserId;
+        await _db.SaveChangesAsync();
+
+        return (true, null, message.GroupId);
     }
 }

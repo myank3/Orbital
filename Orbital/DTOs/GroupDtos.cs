@@ -49,5 +49,6 @@ public record GroupMessageDto(
     string Content,
     string? MediaUrl,
     int MediaType,
-    DateTime SentAt
+    DateTime SentAt,
+    DateTime? DeletedAt = null
 );

@@ -13,6 +13,10 @@ public class GroupMessage
 
     public DateTime SentAt { get; set; } = DateTime.UtcNow;
 
+    // Soft delete — set when the message is removed for everyone.
+    public DateTime? DeletedAt { get; set; }
+    public string? DeletedBy { get; set; }
+
     // Foreign Keys
     public int GroupId { get; set; }
     public Group Group { get; set; } = null!;
