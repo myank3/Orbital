@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+namespace Orbital;
+
 public class CustomGoogleHandler : OAuthHandler<GoogleOptions>
 {
     public CustomGoogleHandler(

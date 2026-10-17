@@ -1,11 +1,13 @@
 using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.OAuth;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -129,17 +131,27 @@ builder.Services
             }
         };
     })
-    .AddGoogle()
     .AddScheme<GoogleOptions, CustomGoogleHandler>("Google", null);
 
-// ── 6b. Google options — configured AFTER both scheme registrations, ───────
-// so both .AddGoogle() and .AddScheme<..., CustomGoogleHandler>() see the
-// same ClientId / ClientSecret / SignInScheme at runtime.
+// ── 6b. Provide the post-configure defaults that .AddGoogle() would have ───
+builder.Services.TryAddEnumerable(
+    ServiceDescriptor.Singleton<
+        IPostConfigureOptions<GoogleOptions>,
+        OAuthPostConfigureOptions<GoogleOptions, GoogleHandler>>());
+
 builder.Services.Configure<GoogleOptions>("Google", googleOptions =>
 {
     googleOptions.ClientId = builder.Configuration["Authentication:Google:ClientId"]!;
     googleOptions.ClientSecret = builder.Configuration["Authentication:Google:ClientSecret"]!;
     googleOptions.SignInScheme = IdentityConstants.ExternalScheme;
+
+    // Google's endpoints — OAuthPostConfigureOptions does not set these,
+    // they're normally set by the internal GooglePostConfigureOptions.
+    // Without them, Options.UserInformationEndpoint is null and
+    // CustomGoogleHandler.CreateTicketAsync throws at runtime.
+    googleOptions.AuthorizationEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
+    googleOptions.TokenEndpoint = "https://oauth2.googleapis.com/token";
+    googleOptions.UserInformationEndpoint = "https://openidconnect.googleapis.com/v1/userinfo";
 });
 
 // ── 7. SignalR & Custom User ID Provider ───────────────────────────────────
