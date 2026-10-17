@@ -59,20 +59,26 @@ public class AuthController : ControllerBase
     // ─────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Starts the Google OAuth challenge. The browser is redirected to Google,
-    /// then back to <see cref="GoogleCallback"/>.
+    /// Starts the Google OAuth challenge. Google redirects to /signin-google
+    /// (the handler's CallbackPath). The handler then processes the response,
+    /// signs the user into Identity.ExternalScheme, and finally redirects to
+    /// RedirectUri, which is this controller's GoogleCallback action.
     /// </summary>
     [HttpGet("google-login")]
     public IActionResult GoogleLogin()
     {
+        // RedirectUri is where ASP.NET sends the user AFTER the Google
+        // handler has validated the code and signed into ExternalScheme.
         var redirectUrl = Url.Action(nameof(GoogleCallback), "Auth", null, Request.Scheme);
         var properties = new AuthenticationProperties { RedirectUri = redirectUrl };
         return Challenge(properties, GoogleDefaults.AuthenticationScheme);
     }
 
     /// <summary>
-    /// Handles the redirect back from Google. Finds or creates the local user,
-    /// issues our own JWT, sets the refresh cookie, and hands off to the SPA.
+    /// Handles the redirect back from Google after the handler has finished
+    /// processing /signin-google. Reads the principal signed into
+    /// Identity.ExternalScheme, finds or creates the local user, issues our
+    /// own JWT, sets the refresh cookie, and hands off to the SPA.
     /// </summary>
     [HttpGet("google-callback")]
     public async Task<IActionResult> GoogleCallback()
@@ -132,7 +138,6 @@ public class AuthController : ControllerBase
 
         // Issue our own JWT
         var tokens = await _authService.IssueNewSessionAsync(user);
-
 
         // Same refresh cookie path as password login
         AppendRefreshTokenCookie(tokens.RefreshToken, tokens.RefreshTokenExpiry);

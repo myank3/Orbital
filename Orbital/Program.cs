@@ -1,10 +1,8 @@
-using System.Security.Claims;
-using System.Text;
-using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Authentication.Google;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.DataProtection;      // NEW
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http.Features;
-using Microsoft.AspNetCore.HttpOverrides;         // NEW
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -17,13 +15,13 @@ using Orbital.Hubs;
 using Orbital.Models;
 using Orbital.Service;
 using Swashbuckle.AspNetCore.SwaggerGen;
+using System.Security.Claims;
+using System.Text;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // ── 0. Data Protection — PERSIST KEYS ──────────────────────────────────────
-// FIX: Your app pool restarts 90x/week. Without persisting keys, every
-// restart regenerates the encryption keys, making the Google correlation
-// cookie undecryptable → "Correlation failed" → HTTP 500 on /signin-google.
 var keysDir = Path.Combine(builder.Environment.ContentRootPath, "keys");
 Directory.CreateDirectory(keysDir);
 
@@ -131,17 +129,18 @@ builder.Services
             }
         };
     })
-    .AddGoogle(googleOptions =>
-    {
-        googleOptions.ClientId = builder.Configuration["Authentication:Google:ClientId"]!;
-        googleOptions.ClientSecret = builder.Configuration["Authentication:Google:ClientSecret"]!;
-        googleOptions.SignInScheme = IdentityConstants.ExternalScheme;
+    .AddGoogle()
+    .AddScheme<GoogleOptions, CustomGoogleHandler>("Google", null);
 
-        // FIX: Correlation cookie must survive the cross-site redirect from
-        // Google back to your domain.
-        googleOptions.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
-        googleOptions.CorrelationCookie.SameSite = SameSiteMode.None;
-    });
+// ── 6b. Google options — configured AFTER both scheme registrations, ───────
+// so both .AddGoogle() and .AddScheme<..., CustomGoogleHandler>() see the
+// same ClientId / ClientSecret / SignInScheme at runtime.
+builder.Services.Configure<GoogleOptions>("Google", googleOptions =>
+{
+    googleOptions.ClientId = builder.Configuration["Authentication:Google:ClientId"]!;
+    googleOptions.ClientSecret = builder.Configuration["Authentication:Google:ClientSecret"]!;
+    googleOptions.SignInScheme = IdentityConstants.ExternalScheme;
+});
 
 // ── 7. SignalR & Custom User ID Provider ───────────────────────────────────
 builder.Services.AddSingleton<IUserIdProvider, CustomUserIdProvider>();
