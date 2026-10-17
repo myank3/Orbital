@@ -2,7 +2,9 @@ using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;      // NEW
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.HttpOverrides;         // NEW
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
@@ -18,7 +20,28 @@ using Swashbuckle.AspNetCore.SwaggerGen;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── 1. Kestrel & Multipart Form Limits (33 MB) ─────────────────────────────
+// ── 0. Data Protection — PERSIST KEYS ──────────────────────────────────────
+// FIX: Your app pool restarts 90x/week. Without persisting keys, every
+// restart regenerates the encryption keys, making the Google correlation
+// cookie undecryptable → "Correlation failed" → HTTP 500 on /signin-google.
+var keysDir = Path.Combine(builder.Environment.ContentRootPath, "keys");
+Directory.CreateDirectory(keysDir);
+
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(keysDir))
+    .SetApplicationName("Orbital");
+
+// ── 0b. Forwarded Headers — behind MonsterASP.NET reverse proxy ────────────
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor
+                             | ForwardedHeaders.XForwardedProto
+                             | ForwardedHeaders.XForwardedHost;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
+// ── 1. Kestrel & Multipart Form Limits (33 MB — file uploads) ──────────────
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = 33_000_000;
@@ -90,12 +113,10 @@ builder.Services
 
             ClockSkew = TimeSpan.FromMinutes(2),
 
-            // Preserves readable username for controllers / User.Identity.Name
             NameClaimType = ClaimTypes.Name,
             RoleClaimType = ClaimTypes.Role
         };
 
-        // Extract token for SignalR WebSocket upgrades & long-polling
         options.Events = new JwtBearerEvents
         {
             OnMessageReceived = context =>
@@ -115,15 +136,19 @@ builder.Services
         googleOptions.ClientId = builder.Configuration["Authentication:Google:ClientId"]!;
         googleOptions.ClientSecret = builder.Configuration["Authentication:Google:ClientSecret"]!;
         googleOptions.SignInScheme = IdentityConstants.ExternalScheme;
+
+        // FIX: Correlation cookie must survive the cross-site redirect from
+        // Google back to your domain.
+        googleOptions.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
+        googleOptions.CorrelationCookie.SameSite = SameSiteMode.None;
     });
 
 // ── 7. SignalR & Custom User ID Provider ───────────────────────────────────
-// Directs SignalR's Context.UserIdentifier to the GUID, leaving User.Identity.Name intact
 builder.Services.AddSingleton<IUserIdProvider, CustomUserIdProvider>();
 
 builder.Services.AddSignalR(options =>
 {
-    options.MaximumReceiveMessageSize = 33 * 1024 * 1024; // 33 MB
+    options.MaximumReceiveMessageSize = 5 * 1024 * 1024; // 5 MB (was 33 MB)
     options.EnableDetailedErrors = true;
 });
 
@@ -139,6 +164,7 @@ builder.Services.AddScoped<CallService>();
 builder.Services.AddScoped<UserService>();
 builder.Services.AddSingleton<PresenceTracker>();
 builder.Services.AddHostedService<StaleCallCleanupService>();
+
 // ── 9. CORS Policy ─────────────────────────────────────────────────────────
 builder.Services.AddCors(options =>
 {
@@ -153,7 +179,10 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// ── 10. Swagger (Enabled in all environments for testing) ──────────────────
+// FIX: MUST be the very first middleware.
+app.UseForwardedHeaders();
+
+// ── 10. Swagger ────────────────────────────────────────────────────────────
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
@@ -183,10 +212,8 @@ app.UseStaticFiles(new StaticFileOptions
 // ── 12. Middleware Pipeline Sequence ───────────────────────────────────────
 app.UseHttpsRedirection();
 
-// CORS must be executed before Authentication and Hub mappings
 app.UseCors("AllowAll");
 app.UseAuthentication();
-
 app.UseAuthorization();
 
 app.MapControllers();
