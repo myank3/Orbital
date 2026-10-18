@@ -23,8 +23,10 @@ using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ── 0. Data Protection — PERSIST KEYS ──────────────────────────────────────
-var keysDir = Path.Combine(builder.Environment.ContentRootPath, "keys");
+// ── 0. Data Protection — MUST write to App_Data on shared hosting ──────────
+// ContentRoot is read-only for the app pool identity on MonsterASP.NET.
+// App_Data is the only folder IIS guarantees write access to.
+var keysDir = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "keys");
 Directory.CreateDirectory(keysDir);
 
 builder.Services.AddDataProtection()
@@ -54,10 +56,13 @@ builder.Services.Configure<FormOptions>(options =>
     options.MultipartHeadersLengthLimit = 33_000_000;
 });
 
-// ── 2. Swagger / OpenAPI Configuration ─────────────────────────────────────
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
-builder.Services.AddTransient<IConfigureOptions<SwaggerGenOptions>, ConfigureSwaggerOptions>();
+// ── 2. Swagger — Development only (memory + no public API docs) ────────────
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddEndpointsApiExplorer();
+    builder.Services.AddSwaggerGen();
+    builder.Services.AddTransient<IConfigureOptions<SwaggerGenOptions>, ConfigureSwaggerOptions>();
+}
 
 // ── 3. Controllers & JSON Serialization ────────────────────────────────────
 builder.Services.AddControllers()
@@ -160,7 +165,7 @@ builder.Services.AddSingleton<IUserIdProvider, CustomUserIdProvider>();
 builder.Services.AddSignalR(options =>
 {
     options.MaximumReceiveMessageSize = 5 * 1024 * 1024; // 5 MB (was 33 MB)
-    options.EnableDetailedErrors = true;
+    options.EnableDetailedErrors = builder.Environment.IsDevelopment();
 });
 
 // ── 8. Application Services & In-Memory Presence Tracker ───────────────────
@@ -175,6 +180,9 @@ builder.Services.AddScoped<CallService>();
 builder.Services.AddScoped<UserService>();
 builder.Services.AddSingleton<PresenceTracker>();
 builder.Services.AddHostedService<StaleCallCleanupService>();
+
+// 8b. HTTP client for Cloudflare TURN credential generation
+builder.Services.AddHttpClient();
 
 // ── 9. CORS Policy ─────────────────────────────────────────────────────────
 builder.Services.AddCors(options =>
@@ -193,15 +201,20 @@ var app = builder.Build();
 // FIX: MUST be the very first middleware.
 app.UseForwardedHeaders();
 
-// ── 10. Swagger ────────────────────────────────────────────────────────────
-app.UseSwagger();
-app.UseSwaggerUI(c =>
+// ── 10. Swagger — Development only ─────────────────────────────────────────
+if (app.Environment.IsDevelopment())
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Orbital API v1");
-    c.RoutePrefix = "swagger";
-});
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Orbital API v1");
+        c.RoutePrefix = "swagger";
+    });
+}
 
-// ── 11. Static File Serving ────────────────────────────────────────────────
+// ── 11. Static File Serving — ONLY avatars ─────────────────────────────────
+// DO NOT add a second UseStaticFiles with RequestPath = "" here.
+// That would serve appsettings.json, keys/, and the DLL to anyone who asks.
 var avatarsDir = Path.Combine(app.Environment.ContentRootPath, "avatars");
 if (!Directory.Exists(avatarsDir))
 {
@@ -212,12 +225,6 @@ app.UseStaticFiles(new StaticFileOptions
 {
     FileProvider = new PhysicalFileProvider(avatarsDir),
     RequestPath = "/avatars"
-});
-
-app.UseStaticFiles(new StaticFileOptions
-{
-    FileProvider = new PhysicalFileProvider(app.Environment.ContentRootPath),
-    RequestPath = ""
 });
 
 // ── 12. Middleware Pipeline Sequence ───────────────────────────────────────

@@ -68,12 +68,13 @@ public class CallController : ControllerBase
 
     /// <summary>
     /// Fetch public STUN/TURN ICE servers for WebRTC peer connection handshakes.
+    /// Returns STUN plus any configured TURN providers (Cloudflare + Metered).
     /// </summary>
     [HttpGet("ice-servers")]
-    [ProducesResponseType(typeof(IceServerConfigDto), StatusCodes.Status200OK)]
-    public IActionResult GetIceServers()
+    [ProducesResponseType(typeof(List<IceServerConfigDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetIceServers()
     {
-        var servers = _callService.GetIceServers();
+        var servers = await _callService.GetIceServersAsync();
         return Ok(servers);
     }
 }
