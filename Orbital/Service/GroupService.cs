@@ -245,6 +245,32 @@ public class GroupService
         if (sender == null)
             return (false, "Sender not found.", null);
 
+        // ── Ephemeral call signals — broadcast only, never persist ──
+        // WebRTC signaling (join/publish/mute/leave/probe) goes through
+        // sendGroupMessage so peers receive it over the group's SignalR
+        // channel. But it must not hit GroupMessages, otherwise every
+        // heartbeat writes a row and eventually buries real chat in
+        // pagination. Returning a transient DTO (Id = 0) lets the hub
+        // broadcast normally while skipping the DB write.
+        // Reactions ([react:]) and deletions ([del:]) are NOT included
+        // here — they must persist so they survive page reloads.
+        if (!string.IsNullOrEmpty(dto.Content) &&
+            dto.Content.StartsWith("[call:", StringComparison.Ordinal))
+        {
+            return (true, null, new GroupMessageDto(
+                0L,
+                dto.GroupId,
+                sender.Id,
+                sender.DisplayName,
+                sender.AvatarUrl,
+                dto.Content,
+                dto.MediaUrl,
+                dto.MediaKey,
+                dto.MediaType,
+                DateTime.UtcNow
+            ));
+        }
+
         var message = new GroupMessage
         {
             GroupId = dto.GroupId,
