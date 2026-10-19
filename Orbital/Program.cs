@@ -164,7 +164,7 @@ builder.Services.AddSingleton<IUserIdProvider, CustomUserIdProvider>();
 
 builder.Services.AddSignalR(options =>
 {
-    options.MaximumReceiveMessageSize = 5 * 1024 * 1024; // 5 MB (was 33 MB)
+    options.MaximumReceiveMessageSize = 256 * 1024;
     options.EnableDetailedErrors = builder.Environment.IsDevelopment();
 });
 
