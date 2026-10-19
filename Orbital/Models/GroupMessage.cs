@@ -8,6 +8,10 @@ public class GroupMessage
 
     public string? MediaUrl { get; set; }
 
+    // R2 object key (e.g. "group/{groupId}/{guid}.png"). Preferred for new rows;
+    // MediaUrl remains for legacy base64 rows.
+    public string? MediaKey { get; set; }
+
     // 0 = Text, 1 = Image, 2 = Video, 3 = Audio, 4 = Document
     public int MediaType { get; set; } = 0;
 

@@ -37,9 +37,10 @@ public class DirectMessageController : ControllerBase
 
     /// <summary>
     /// Retrieve paginated chat history with a specific friend.
+    /// Returns messages plus a map of mediaKey -> presigned R2 URL.
     /// </summary>
     [HttpGet("history/{targetUserId}")]
-    [ProducesResponseType(typeof(List<DirectMessageDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(PresignedMessagesResponse<DirectMessageDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetChatHistory(
         string targetUserId,
         [FromQuery] long? beforeId = null,

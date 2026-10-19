@@ -181,6 +181,9 @@ builder.Services.AddScoped<UserService>();
 builder.Services.AddSingleton<PresenceTracker>();
 builder.Services.AddHostedService<StaleCallCleanupService>();
 
+// 8a. Cloudflare R2 storage (presigned URLs for direct-to-R2 uploads)
+builder.Services.AddSingleton<R2StorageService>();
+
 // 8b. HTTP client for Cloudflare TURN credential generation
 builder.Services.AddHttpClient();
 

@@ -37,6 +37,7 @@ public record SendGroupMessageDto(
     int GroupId,
     string Content,
     string? MediaUrl,
+    string? MediaKey,
     int MediaType
 );
 
@@ -48,6 +49,7 @@ public record GroupMessageDto(
     string? SenderAvatarUrl,
     string Content,
     string? MediaUrl,
+    string? MediaKey,
     int MediaType,
     DateTime SentAt,
     DateTime? DeletedAt = null

@@ -97,9 +97,10 @@ public class GroupController : ControllerBase
 
     /// <summary>
     /// Retrieve paginated messages within a group.
+    /// Returns messages plus a map of mediaKey -> presigned R2 URL.
     /// </summary>
     [HttpGet("{groupId:int}/messages")]
-    [ProducesResponseType(typeof(List<GroupMessageDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(PresignedMessagesResponse<GroupMessageDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetGroupMessages(
         int groupId,
         [FromQuery] long? beforeId = null,

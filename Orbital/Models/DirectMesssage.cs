@@ -8,6 +8,10 @@ public class DirectMessage
 
     public string? MediaUrl { get; set; }
 
+    // R2 object key (e.g. "dm/{senderId}/{guid}.png"). Preferred for new rows;
+    // MediaUrl remains for legacy base64 rows.
+    public string? MediaKey { get; set; }
+
     // 0 = None/Text, 1 = Image, 2 = Video, 3 = Audio, 4 = Document
     public int MediaType { get; set; } = 0;
 

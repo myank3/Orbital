@@ -8,10 +8,12 @@ namespace Orbital.Service;
 public class GroupService
 {
     private readonly ApplicationDbContext _db;
+    private readonly R2StorageService _r2;
 
-    public GroupService(ApplicationDbContext db)
+    public GroupService(ApplicationDbContext db, R2StorageService r2)
     {
         _db = db;
+        _r2 = r2;
     }
 
     /// <summary>
@@ -226,8 +228,18 @@ public class GroupService
         if (!isMember)
             return (false, "You are not a member of this group.", null);
 
-        if (string.IsNullOrWhiteSpace(dto.Content) && string.IsNullOrWhiteSpace(dto.MediaUrl))
+        if (string.IsNullOrWhiteSpace(dto.Content)
+            && string.IsNullOrWhiteSpace(dto.MediaUrl)
+            && string.IsNullOrWhiteSpace(dto.MediaKey))
             return (false, "Message cannot be empty.", null);
+
+        // R2 key must be scoped to this group.
+        if (!string.IsNullOrEmpty(dto.MediaKey))
+        {
+            var expectedPrefix = $"group/{dto.GroupId}/";
+            if (!dto.MediaKey.StartsWith(expectedPrefix, StringComparison.Ordinal))
+                return (false, "Invalid media key for this group.", null);
+        }
 
         var sender = await _db.Users.FindAsync(senderId);
         if (sender == null)
@@ -239,6 +251,7 @@ public class GroupService
             SenderId = senderId,
             Content = dto.Content?.Trim() ?? string.Empty,
             MediaUrl = dto.MediaUrl,
+            MediaKey = dto.MediaKey,
             MediaType = dto.MediaType,
             SentAt = DateTime.UtcNow
         };
@@ -254,6 +267,7 @@ public class GroupService
             sender.AvatarUrl,
             message.Content,
             message.MediaUrl,
+            message.MediaKey,
             message.MediaType,
             message.SentAt
         );
@@ -263,11 +277,9 @@ public class GroupService
 
     /// <summary>
     /// Returns paginated messages for a group channel.
+    /// Returns messages plus a map of mediaKey -> presigned R2 URL.
     /// </summary>
-    /// <summary>
-    /// Returns paginated messages for a group channel.
-    /// </summary>
-    public async Task<List<GroupMessageDto>> GetGroupMessagesAsync(
+    public async Task<PresignedMessagesResponse<GroupMessageDto>> GetGroupMessagesAsync(
         int groupId,
         string userId,
         long? beforeId = null,
@@ -277,24 +289,26 @@ public class GroupService
             .AnyAsync(gm => gm.GroupId == groupId && gm.UserId == userId);
 
         if (!isMember)
-            return new List<GroupMessageDto>();
+            return new PresignedMessagesResponse<GroupMessageDto>(
+                new List<GroupMessageDto>(),
+                new Dictionary<string, string>());
 
         var query = _db.GroupMessages
             .AsNoTracking()
             .Include(m => m.Sender)
-            .Where(m => m.GroupId == groupId && m.DeletedAt == null);   // ← the fix
+            .Where(m => m.GroupId == groupId && m.DeletedAt == null);
 
         if (beforeId.HasValue)
         {
             query = query.Where(m => m.Id < beforeId.Value);
         }
 
-        var messages = await query
+        var rows = await query
             .OrderByDescending(m => m.SentAt)
             .Take(take)
             .ToListAsync();
 
-        return messages
+        var messages = rows
             .OrderBy(m => m.SentAt)
             .Select(m => new GroupMessageDto(
                 m.Id,
@@ -304,13 +318,25 @@ public class GroupService
                 m.Sender.AvatarUrl,
                 m.Content,
                 m.MediaUrl,
+                m.MediaKey,
                 m.MediaType,
                 m.SentAt
             ))
             .ToList();
+
+        var keys = rows
+            .Where(m => !string.IsNullOrEmpty(m.MediaKey))
+            .Select(m => m.MediaKey!)
+            .ToList();
+
+        var presigned = keys.Count > 0
+            ? _r2.PresignGetBatch(keys, TimeSpan.FromHours(4))
+            : new Dictionary<string, string>();
+
+        return new PresignedMessagesResponse<GroupMessageDto>(messages, presigned);
     }
 
-    // ─── NEW: Delete group (creator only) ───────────────────────
+    // ─── Delete group (creator only) ───────────────────────
 
     /// <summary>
     /// Deletes a group and all its messages and members. Creator only.
@@ -344,15 +370,37 @@ public class GroupService
         // Remove the group itself
         _db.Groups.Remove(group);
 
+        // Capture R2 keys before the DB rows go away
+        var mediaKeys = messages
+            .Where(m => !string.IsNullOrEmpty(m.MediaKey))
+            .Select(m => m.MediaKey!)
+            .ToList();
+
         await _db.SaveChangesAsync();
+
+        // Best-effort R2 cleanup. Orphans are acceptable; failing the delete
+        // because R2 hiccupped would be worse.
+        foreach (var key in mediaKeys)
+        {
+            try
+            {
+                await _r2.DeleteAsync(key);
+            }
+            catch
+            {
+                // orphan object — acceptable
+            }
+        }
+
         return (true, null);
     }
-    // ─── NEW: Soft-delete a group message (sender or creator only) ──
+
+    // ─── Soft-delete a group message (sender or creator only) ──
 
     /// <summary>
     /// Soft-deletes a group message for everyone. Only the original sender
-    /// or the group creator may delete.
-    /// Returns the group id so the caller can broadcast to the right channel.
+    /// or the group creator may delete. Returns the group id so the caller
+    /// can broadcast to the right channel.
     /// </summary>
     public async Task<(bool Success, string? Error, int GroupId)> DeleteGroupMessageForEveryoneAsync(
         string requestingUserId,
@@ -374,9 +422,23 @@ public class GroupService
         if (!isSender && !isCreator)
             return (false, "You can only delete your own messages.", message.GroupId);
 
+        var mediaKey = message.MediaKey;
+
         message.DeletedAt = DateTime.UtcNow;
         message.DeletedBy = requestingUserId;
         await _db.SaveChangesAsync();
+
+        if (!string.IsNullOrEmpty(mediaKey))
+        {
+            try
+            {
+                await _r2.DeleteAsync(mediaKey);
+            }
+            catch
+            {
+                // orphan object — acceptable
+            }
+        }
 
         return (true, null, message.GroupId);
     }

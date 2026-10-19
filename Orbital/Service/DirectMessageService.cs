@@ -8,10 +8,12 @@ namespace Orbital.Service;
 public class DirectMessageService
 {
     private readonly ApplicationDbContext _db;
+    private readonly R2StorageService _r2;
 
-    public DirectMessageService(ApplicationDbContext db)
+    public DirectMessageService(ApplicationDbContext db, R2StorageService r2)
     {
         _db = db;
+        _r2 = r2;
     }
 
     public async Task<(bool Success, string? Error, DirectMessageDto? Message)> SendMessageAsync(
@@ -20,13 +22,22 @@ public class DirectMessageService
     {
         // E2EE: accept an encrypted payload (ciphertext+nonce) or media-only.
         var hasCiphertext = !string.IsNullOrWhiteSpace(dto.Ciphertext);
-        var hasMedia = !string.IsNullOrWhiteSpace(dto.MediaUrl);
+        var hasMedia = !string.IsNullOrWhiteSpace(dto.MediaUrl)
+                    || !string.IsNullOrWhiteSpace(dto.MediaKey);
 
         if (!hasCiphertext && !hasMedia)
             return (false, "Message cannot be empty.", null);
 
         if (hasCiphertext && string.IsNullOrWhiteSpace(dto.Nonce))
             return (false, "Encrypted payload missing nonce.", null);
+
+        // R2 key must belong to the sender (prefix check).
+        if (!string.IsNullOrEmpty(dto.MediaKey))
+        {
+            var expectedPrefix = $"dm/{senderId}/";
+            if (!dto.MediaKey.StartsWith(expectedPrefix, StringComparison.Ordinal))
+                return (false, "Invalid media key.", null);
+        }
 
         var friendship = await _db.Friendships
             .AsNoTracking()
@@ -49,6 +60,7 @@ public class DirectMessageService
             Ciphertext = dto.Ciphertext,
             Nonce = dto.Nonce,
             MediaUrl = dto.MediaUrl,
+            MediaKey = dto.MediaKey,
             MediaType = dto.MediaType ?? 0,
             IsRead = false,
             SentAt = DateTime.UtcNow,
@@ -65,6 +77,7 @@ public class DirectMessageService
             message.Nonce,
             null, // never echo legacy Content back for a new message
             message.MediaUrl,
+            message.MediaKey,
             message.MediaType,
             message.IsRead,
             message.SentAt
@@ -73,7 +86,7 @@ public class DirectMessageService
         return (true, null, messageDto);
     }
 
-    public async Task<List<DirectMessageDto>> GetChatHistoryAsync(
+    public async Task<PresignedMessagesResponse<DirectMessageDto>> GetChatHistoryAsync(
         string currentUserId,
         string targetUserId,
         long? beforeId = null,
@@ -95,12 +108,12 @@ public class DirectMessageService
             query = query.Where(m => m.Id < beforeId.Value);
         }
 
-        var messages = await query
+        var rows = await query
             .OrderByDescending(m => m.SentAt)
             .Take(take)
             .ToListAsync();
 
-        return messages
+        var messages = rows
             .OrderBy(m => m.SentAt)
             .Select(m => new DirectMessageDto(
                 m.Id,
@@ -113,11 +126,24 @@ public class DirectMessageService
                 // set and empty Content → return null.
                 string.IsNullOrEmpty(m.Ciphertext) ? m.Content : null,
                 m.MediaUrl,
+                m.MediaKey,
                 m.MediaType,
                 m.IsRead,
                 m.SentAt
             ))
             .ToList();
+
+        // Batch-presign every R2 key in this page. Empty dict if none.
+        var keys = rows
+            .Where(m => !string.IsNullOrEmpty(m.MediaKey))
+            .Select(m => m.MediaKey!)
+            .ToList();
+
+        var presigned = keys.Count > 0
+            ? _r2.PresignGetBatch(keys, TimeSpan.FromHours(4))
+            : new Dictionary<string, string>();
+
+        return new PresignedMessagesResponse<DirectMessageDto>(messages, presigned);
     }
 
     public async Task MarkAsReadAsync(string currentUserId, string senderId)
@@ -187,8 +213,26 @@ public class DirectMessageService
         if (message.SenderId != userId)
             return (false, "You can only delete your own messages for everyone.");
 
+        var mediaKey = message.MediaKey;
+
+        // Commit the DB delete first. If R2 cleanup fails after this, we have
+        // an orphan object (acceptable). If we deleted R2 first and the DB
+        // delete failed, we'd have a dangling pointer and a broken image.
         _db.DirectMessages.Remove(message);
         await _db.SaveChangesAsync();
+
+        if (!string.IsNullOrEmpty(mediaKey))
+        {
+            try
+            {
+                await _r2.DeleteAsync(mediaKey);
+            }
+            catch
+            {
+                // Orphan object — acceptable. Not worth failing the API call.
+            }
+        }
+
         return (true, null);
     }
 

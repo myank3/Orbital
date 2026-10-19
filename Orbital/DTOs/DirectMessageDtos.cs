@@ -5,8 +5,10 @@ public record SendDirectMessageDto(
     string? Ciphertext,
     string? Nonce,
     string? MediaUrl,
+    string? MediaKey,
     int? MediaType
-); 
+);
+
 public record DirectMessageDto(
     long Id,
     string SenderId,
@@ -15,6 +17,7 @@ public record DirectMessageDto(
     string? Nonce,
     string? Content,
     string? MediaUrl,
+    string? MediaKey,
     int? MediaType,
     bool IsRead,
     DateTime SentAt
