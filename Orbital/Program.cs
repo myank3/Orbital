@@ -178,6 +178,7 @@ builder.Services.AddScoped<DirectMessageService>();
 builder.Services.AddScoped<GroupService>();
 builder.Services.AddScoped<CallService>();
 builder.Services.AddScoped<UserService>();
+builder.Services.AddScoped<PushNotificationService>();
 builder.Services.AddSingleton<PresenceTracker>();
 builder.Services.AddHostedService<StaleCallCleanupService>();
 

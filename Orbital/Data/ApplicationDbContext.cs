@@ -44,6 +44,9 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser, Applicati
             entity.Property(u => u.DisplayName)
                   .IsRequired()
                   .HasMaxLength(100);
+            builder.Entity<ApplicationUser>()
+              .Property(u => u.FcmToken)
+              .HasMaxLength(255);
 
             entity.Property(u => u.CurrentSessionId)
                   .HasMaxLength(100);
