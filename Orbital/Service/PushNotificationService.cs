@@ -59,10 +59,11 @@ public class PushNotificationService
                 Priority = Priority.High, // Wakes up the phone
                 Notification = new AndroidNotification()
                 {
-                    Icon = "ic_notification", // 🔥 Uses your white logo (if added to android/app/src/main/res/drawable)
+                    Icon = "ic_notification", // 🔥 Uses your white logo
                     Sound = "default",
                     Tag = chatId,             // 🔥 Groups messages by user (like WhatsApp)
-                    Color = "#D97706"         // Amber tint
+                    Color = "#D97706",        // Amber tint
+                    ChannelId = "orbital_messages_v100" // 🔥 FORCES ANDROID TO RESET ICON CACHE
                 }
             }
         };
@@ -77,7 +78,7 @@ public class PushNotificationService
         }
     }
 
-    // Keep your Call push method if you have it
+    // Call push method
     public async Task SendCallPushAsync(string fcmToken, string callerName, string sessionId)
     {
         if (string.IsNullOrEmpty(fcmToken) || FirebaseApp.DefaultInstance == null) return;
@@ -98,9 +99,10 @@ public class PushNotificationService
                 {
                     Title = "Incoming Call",
                     Body = $"{callerName} is calling you...",
-                    ChannelId = "calls",
+                    ChannelId = "orbital_calls_v100", // 🔥 NEW CHANNEL ID
                     Priority = NotificationPriority.MAX,
-                    Sound = "ringtone"
+                    Sound = "ringtone",
+                    Icon = "ic_notification"         // 🔥 ADDED THE WHITE ICON HERE
                 }
             }
         };
