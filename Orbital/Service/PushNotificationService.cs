@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using System.IO;
 using System.Threading.Tasks;
 using System;
+using System.Collections.Generic;
 
 namespace Orbital.Service;
 
@@ -16,10 +17,9 @@ public class PushNotificationService
     {
         _config = config;
 
-        // Initialize Firebase once when the app starts
+        // Initialize Firebase only once
         if (FirebaseApp.DefaultInstance == null)
         {
-            // 🔥 Must point to the App_Data folder for MonsterASP
             var path = Path.Combine(Directory.GetCurrentDirectory(), "App_Data", "firebase-adminsdk.json");
 
             if (File.Exists(path))
@@ -31,13 +31,13 @@ public class PushNotificationService
             }
             else
             {
-                // Log warning: Firebase JSON not found
                 Console.WriteLine("⚠️ Firebase config missing at: " + path);
             }
         }
     }
 
-    public async Task SendMessagePushAsync(string fcmToken, string title, string body, string chatId)
+    // 🔥 Updated to take 5 arguments (including notificationType)
+    public async Task SendMessagePushAsync(string fcmToken, string title, string body, string chatId, string notificationType = "message")
     {
         if (string.IsNullOrEmpty(fcmToken) || FirebaseApp.DefaultInstance == null) return;
 
@@ -49,33 +49,35 @@ public class PushNotificationService
                 Title = title,
                 Body = body
             },
-            Data = new System.Collections.Generic.Dictionary<string, string>()
+            Data = new Dictionary<string, string>()
             {
-                { "type", "message" },
+                { "type", notificationType },
                 { "chatId", chatId }
             },
             Android = new AndroidConfig()
             {
-                Priority = Priority.High, // Wakes up the phone even in Doze mode
+                Priority = Priority.High, // Wakes up the phone
                 Notification = new AndroidNotification()
                 {
-                    Sound = "default"
+                    Icon = "ic_notification", // 🔥 Uses your white logo (if added to android/app/src/main/res/drawable)
+                    Sound = "default",
+                    Tag = chatId,             // 🔥 Groups messages by user (like WhatsApp)
+                    Color = "#D97706"         // Amber tint
                 }
             }
         };
 
         try
         {
-            // Send to Firebase
             await FirebaseMessaging.DefaultInstance.SendAsync(message);
         }
         catch (Exception ex)
         {
-            // Silently fail if token is invalid/expired so the API doesn't crash
             Console.WriteLine($"Push failed: {ex.Message}");
         }
-
     }
+
+    // Keep your Call push method if you have it
     public async Task SendCallPushAsync(string fcmToken, string callerName, string sessionId)
     {
         if (string.IsNullOrEmpty(fcmToken) || FirebaseApp.DefaultInstance == null) return;
@@ -83,23 +85,22 @@ public class PushNotificationService
         var message = new Message()
         {
             Token = fcmToken,
-            // For calls, we often use Data-only payloads so the app can trigger a custom ringing UI
-            Data = new System.Collections.Generic.Dictionary<string, string>()
-        {
-            { "type", "incoming_call" },
-            { "sessionId", sessionId },
-            { "callerName", callerName }
-        },
+            Data = new Dictionary<string, string>()
+            {
+                { "type", "incoming_call" },
+                { "sessionId", sessionId },
+                { "callerName", callerName }
+            },
             Android = new AndroidConfig()
             {
-                Priority = Priority.High, // Highest priority to wake up the phone
+                Priority = Priority.High,
                 Notification = new AndroidNotification()
                 {
                     Title = "Incoming Call",
                     Body = $"{callerName} is calling you...",
-                    ChannelId = "calls", // You'll need to create this channel on the Android side
+                    ChannelId = "calls",
                     Priority = NotificationPriority.MAX,
-                    Sound = "ringtone" // Use a custom ringtone
+                    Sound = "ringtone"
                 }
             }
         };

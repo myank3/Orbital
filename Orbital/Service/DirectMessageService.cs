@@ -11,8 +11,8 @@ public class DirectMessageService
 {
     private readonly ApplicationDbContext _db;
     private readonly R2StorageService _r2;
-    private readonly PushNotificationService _pushService; // 🔥 Added
-    private readonly UserManager<ApplicationUser> _userManager; // 🔥 Added
+    private readonly PushNotificationService _pushService;
+    private readonly UserManager<ApplicationUser> _userManager;
 
     public DirectMessageService(
         ApplicationDbContext db,
@@ -85,17 +85,29 @@ public class DirectMessageService
 
         if (recipient != null && !string.IsNullOrEmpty(recipient.FcmToken))
         {
-            // Because it's E2EE, the server can't read the message.
-            // We use the sender's handle for the title.
-            var title = sender?.UserHandle ?? "New Message";
-            var body = hasMedia ? "📷 Sent you an attachment" : "Sent you a message";
+            // Use the sender's DisplayName (e.g., "Mayank") instead of the handle
+            var title = sender?.DisplayName ?? sender?.UserHandle ?? "New Message";
+
+            // Grab the actual text from the payload (since it's plain text)
+            // Grab the actual text from the payload (since it's plain text)
+            var messageText = !string.IsNullOrWhiteSpace(dto.Ciphertext)
+                ? dto.Ciphertext
+                : "New message";
+            // Truncate long messages so they fit nicely in the notification banner
+            if (messageText.Length > 80)
+                messageText = messageText.Substring(0, 77) + "...";
+
+            var body = hasMedia
+                ? (string.IsNullOrWhiteSpace(dto.Ciphertext) ? "📷 Photo" : $"📷 Photo: {messageText}")
+                : messageText;
 
             // Fire and forget (don't await, so the API responds instantly)
             _ = Task.Run(() => _pushService.SendMessagePushAsync(
                 recipient.FcmToken,
                 title,
                 body,
-                senderId // We pass senderId as the chatId so the app knows who to open
+                senderId, // We pass senderId as the chatId so the app knows who to open
+                "message" // 🔥 Explicitly pass the type
             ));
         }
 

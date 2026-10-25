@@ -2,6 +2,11 @@
 using Orbital.Data;
 using Orbital.DTOs;
 using Orbital.Models;
+using Microsoft.AspNetCore.Identity; // 🔥 Added for UserManager
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using System;
 
 namespace Orbital.Service;
 
@@ -9,11 +14,19 @@ public class GroupService
 {
     private readonly ApplicationDbContext _db;
     private readonly R2StorageService _r2;
+    private readonly PushNotificationService _pushService; // 🔥 Added
+    private readonly UserManager<ApplicationUser> _userManager; // 🔥 Added
 
-    public GroupService(ApplicationDbContext db, R2StorageService r2)
+    public GroupService(
+        ApplicationDbContext db,
+        R2StorageService r2,
+        PushNotificationService pushService,
+        UserManager<ApplicationUser> userManager)
     {
         _db = db;
         _r2 = r2;
+        _pushService = pushService;
+        _userManager = userManager;
     }
 
     /// <summary>
@@ -246,14 +259,6 @@ public class GroupService
             return (false, "Sender not found.", null);
 
         // ── Ephemeral call signals — broadcast only, never persist ──
-        // WebRTC signaling (join/publish/mute/leave/probe) goes through
-        // sendGroupMessage so peers receive it over the group's SignalR
-        // channel. But it must not hit GroupMessages, otherwise every
-        // heartbeat writes a row and eventually buries real chat in
-        // pagination. Returning a transient DTO (Id = 0) lets the hub
-        // broadcast normally while skipping the DB write.
-        // Reactions ([react:]) and deletions ([del:]) are NOT included
-        // here — they must persist so they survive page reloads.
         if (!string.IsNullOrEmpty(dto.Content) &&
             dto.Content.StartsWith("[call:", StringComparison.Ordinal))
         {
@@ -284,6 +289,49 @@ public class GroupService
 
         await _db.GroupMessages.AddAsync(message);
         await _db.SaveChangesAsync();
+
+        // 🔥 TRIGGER PUSH NOTIFICATIONS FOR GROUP MEMBERS HERE
+        var group = await _db.Groups.FindAsync(dto.GroupId);
+        if (group != null)
+        {
+            // 1. Get all member IDs in the group, EXCEPT the sender
+            var memberIds = await _db.GroupMembers
+                .Where(gm => gm.GroupId == dto.GroupId && gm.UserId != senderId)
+                .Select(gm => gm.UserId)
+                .ToListAsync();
+
+            // 2. Fetch their FCM tokens
+            var tokens = await _db.Users
+                .Where(u => memberIds.Contains(u.Id) && !string.IsNullOrEmpty(u.FcmToken))
+                .Select(u => u.FcmToken)
+                .ToListAsync();
+
+            if (tokens.Count > 0)
+            {
+                var messageText = message.Content;
+                if (!string.IsNullOrWhiteSpace(messageText) && messageText.Length > 80)
+                    messageText = messageText.Substring(0, 77) + "...";
+
+                var notificationBody = string.IsNullOrWhiteSpace(messageText)
+                    ? $"{sender.DisplayName}: 📷 Photo"
+                    : $"{sender.DisplayName}: {messageText}";
+
+                // 3. Fire and forget (send to all tokens concurrently)
+                _ = Task.Run(async () =>
+                {
+                    var tasks = tokens.Select(token =>
+                        _pushService.SendMessagePushAsync(
+                            token!,
+                            group.Name,
+                            notificationBody,
+                            dto.GroupId.ToString(),
+                            "group_message" // 🔥 Passed correctly
+                        )
+                    );
+                    await Task.WhenAll(tasks);
+                });
+            }
+        }
 
         var messageDto = new GroupMessageDto(
             message.Id,

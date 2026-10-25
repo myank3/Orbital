@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Orbital.Data;
 using Orbital.DTOs;
 using Orbital.Models;
+using System.Threading.Tasks;
+using System;
 
 namespace Orbital.Service;
 
@@ -10,11 +12,16 @@ public class FriendService
 {
     private readonly ApplicationDbContext _db;
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly PushNotificationService _pushService; // 🔥 Added
 
-    public FriendService(ApplicationDbContext db, UserManager<ApplicationUser> userManager)
+    public FriendService(
+        ApplicationDbContext db,
+        UserManager<ApplicationUser> userManager,
+        PushNotificationService pushService) // 🔥 Added
     {
         _db = db;
         _userManager = userManager;
+        _pushService = pushService;
     }
 
     public async Task<(bool Success, string? Error)> SendRequestAsync(string senderId, SendFriendRequestDto dto)
@@ -74,6 +81,19 @@ public class FriendService
         await _db.Friendships.AddAsync(friendship);
         await _db.SaveChangesAsync();
 
+        // 🔥 TRIGGER FRIEND REQUEST PUSH NOTIFICATION
+        var senderUser = await _userManager.FindByIdAsync(senderId);
+        if (targetUser != null && !string.IsNullOrEmpty(targetUser.FcmToken) && senderUser != null)
+        {
+            _ = Task.Run(() => _pushService.SendMessagePushAsync(
+                targetUser.FcmToken,
+                "New Friend Request",
+                $"{senderUser.DisplayName} sent you a friend request.",
+                senderId, // Pass senderId so the app can route to their profile/requests
+                "friend_request" // 🔥 Specific type for the frontend
+            ));
+        }
+
         return (true, null);
     }
 
@@ -94,6 +114,21 @@ public class FriendService
         {
             friendship.Status = FriendshipStatus.Accepted;
             friendship.UpdatedAt = DateTime.UtcNow;
+
+            // 🔥 TRIGGER ACCEPTED PUSH NOTIFICATION
+            var requester = await _userManager.FindByIdAsync(friendship.RequesterId);
+            var accepter = await _userManager.FindByIdAsync(userId);
+
+            if (requester != null && !string.IsNullOrEmpty(requester.FcmToken) && accepter != null)
+            {
+                _ = Task.Run(() => _pushService.SendMessagePushAsync(
+                    requester.FcmToken,
+                    "Friend Request Accepted",
+                    $"{accepter.DisplayName} accepted your friend request.",
+                    userId, // Pass accepter's ID
+                    "friend_accept"
+                ));
+            }
         }
         else
         {
@@ -154,9 +189,6 @@ public class FriendService
             .ToListAsync();
     }
 
-    /// <summary>
-    /// Removes an accepted friendship. Works for either direction.
-    /// </summary>
     public async Task<(bool Success, string? Error)> UnfriendAsync(
         string userId,
         string targetUserId)
@@ -174,10 +206,6 @@ public class FriendService
         return (true, null);
     }
 
-    /// <summary>
-    /// Block or unblock. Block state is stored in BlockedById so each
-    /// direction is independent. Only the blocker can unblock.
-    /// </summary>
     public async Task<(bool Success, string? Error)> SetBlockedAsync(
         string userId,
         string targetUserId,
@@ -246,10 +274,6 @@ public class FriendService
         return (true, null);
     }
 
-    /// <summary>
-    /// Returns full profiles of users the caller has personally blocked.
-    /// Filtered by BlockedById so only the blocker sees them.
-    /// </summary>
     public async Task<List<UserProfileDto>> GetBlockedUsersAsync(string userId)
     {
         var rows = await _db.Friendships
@@ -280,9 +304,6 @@ public class FriendService
         return result;
     }
 
-    /// <summary>
-    /// IDs of users the caller has personally blocked. Used for filtering.
-    /// </summary>
     public async Task<List<string>> GetBlockedUserIdsAsync(string userId)
     {
         return await _db.Friendships
