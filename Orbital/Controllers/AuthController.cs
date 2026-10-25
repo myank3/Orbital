@@ -29,63 +29,45 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("register")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Register([FromBody] RegisterDto dto)
     {
         var (success, error) = await _authService.RegisterAsync(dto);
-        if (!success)
-            return BadRequest(new { message = error });
-
-        return Ok(new { message = "Registration successful. Please verify your email before logging in." });
+        if (!success) return BadRequest(new { message = error });
+        return Ok(new { message = "Registration successful. Please verify your email." });
     }
 
     [HttpPost("login")]
-    [ProducesResponseType(typeof(LoginResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Login([FromBody] LoginDto dto)
     {
         var (success, error, tokens) = await _authService.LoginAsync(dto);
-        if (!success || tokens == null)
-            return Unauthorized(new { message = error });
+        if (!success || tokens == null) return Unauthorized(new { message = error });
 
         AppendRefreshTokenCookie(tokens.RefreshToken, tokens.RefreshTokenExpiry);
+        var isMobile = Request.Headers["X-Client-Type"] == "mobile";
 
-        return Ok(new LoginResponseDto(tokens.AccessToken));
+        // 🔥 Using the explicit constructor parameters to prevent the error
+        return Ok(new LoginResponseDto(
+            tokens.AccessToken,
+            isMobile ? tokens.RefreshToken : null
+        ));
     }
 
-    // ─────────────────────────────────────────────────────────
-    // GOOGLE OAUTH
-    // ─────────────────────────────────────────────────────────
-
-    /// <summary>
-    /// Starts the Google OAuth challenge. Google redirects to /signin-google
-    /// (the handler's CallbackPath). The handler then processes the response,
-    /// signs the user into Identity.ExternalScheme, and finally redirects to
-    /// RedirectUri, which is this controller's GoogleCallback action.
-    /// </summary>
     [HttpGet("google-login")]
-    public IActionResult GoogleLogin()
+    public IActionResult GoogleLogin([FromQuery] string? client = null)
     {
-        // RedirectUri is where ASP.NET sends the user AFTER the Google
-        // handler has validated the code and signed into ExternalScheme.
         var redirectUrl = Url.Action(nameof(GoogleCallback), "Auth", null, Request.Scheme);
         var properties = new AuthenticationProperties { RedirectUri = redirectUrl };
+
+        if (client == "mobile") properties.Items["client"] = "mobile";
         return Challenge(properties, GoogleDefaults.AuthenticationScheme);
     }
 
-    /// <summary>
-    /// Handles the redirect back from Google after the handler has finished
-    /// processing /signin-google. Reads the principal signed into
-    /// Identity.ExternalScheme, finds or creates the local user, issues our
-    /// own JWT, sets the refresh cookie, and hands off to the SPA.
-    /// </summary>
     [HttpGet("google-callback")]
     public async Task<IActionResult> GoogleCallback()
     {
         var frontendUrl = _config["Client:BaseUrl"] ?? "http://localhost:3000";
-
         var result = await HttpContext.AuthenticateAsync(IdentityConstants.ExternalScheme);
+
         if (!result.Succeeded || result.Principal == null)
             return Redirect($"{frontendUrl}/login?error=google_failed");
 
@@ -98,13 +80,7 @@ public class AuthController : ControllerBase
 
         if (user == null)
         {
-            // Generate a unique handle from the email prefix
-            var baseHandle = new string(
-                normalizedEmail.Split('@')[0]
-                    .ToLowerInvariant()
-                    .Where(c => char.IsLetterOrDigit(c) || c == '_')
-                    .ToArray()
-            );
+            var baseHandle = new string(normalizedEmail.Split('@')[0].ToLowerInvariant().Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
             if (baseHandle.Length < 3) baseHandle = "user";
 
             var handle = baseHandle;
@@ -122,7 +98,7 @@ public class AuthController : ControllerBase
                 UserHandle = handle,
                 Realm = "orbit",
                 DisplayName = result.Principal.FindFirstValue(ClaimTypes.Name) ?? handle,
-                EmailConfirmed = true,   // Google already verified the email
+                EmailConfirmed = true,
                 CreatedAt = DateTime.UtcNow
             };
 
@@ -133,46 +109,56 @@ public class AuthController : ControllerBase
             await _userManager.AddToRoleAsync(user, "User");
         }
 
-        // Clean up the temporary external-login cookie set by ASP.NET Identity
         await HttpContext.SignOutAsync(IdentityConstants.ExternalScheme);
-
-        // Issue our own JWT
         var tokens = await _authService.IssueNewSessionAsync(user);
-
-        // Same refresh cookie path as password login
         AppendRefreshTokenCookie(tokens.RefreshToken, tokens.RefreshTokenExpiry);
 
-        return Redirect(
-            $"{frontendUrl}/auth/google/success?token={Uri.EscapeDataString(tokens.AccessToken)}"
-        );
-    }
+        var isMobile = result.Properties?.Items.TryGetValue("client", out var clientType) == true && clientType == "mobile";
 
-    // ─────────────────────────────────────────────────────────
-    // REFRESH / LOGOUT / EMAIL / PASSWORD
-    // ─────────────────────────────────────────────────────────
+        if (isMobile)
+        {
+            var refresh = Uri.EscapeDataString(tokens.RefreshToken);
+            return Redirect($"orbital://auth?token={Uri.EscapeDataString(tokens.AccessToken)}&refreshToken={refresh}");
+        }
+
+        return Redirect($"{frontendUrl}/auth/google/success?token={Uri.EscapeDataString(tokens.AccessToken)}");
+    }
 
     [HttpPost("refresh")]
     [AllowAnonymous]
-    [ProducesResponseType(typeof(LoginResponseDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    public async Task<IActionResult> Refresh()
+    public async Task<IActionResult> Refresh([FromBody] RefreshRequestDto? request = null)
     {
-        var refreshToken = Request.Cookies["refreshToken"];
+        var refreshToken = request?.RefreshToken ?? Request.Cookies["refreshToken"];
         if (string.IsNullOrEmpty(refreshToken))
             return Unauthorized(new { message = "No refresh token." });
 
         var (success, error, tokens) = await _authService.RefreshTokensByValueAsync(refreshToken);
-        if (!success || tokens == null)
-            return Unauthorized(new { message = error });
+        if (!success || tokens == null) return Unauthorized(new { message = error });
 
         AppendRefreshTokenCookie(tokens.RefreshToken, tokens.RefreshTokenExpiry);
+        var isMobile = Request.Headers["X-Client-Type"] == "mobile";
 
-        return Ok(new LoginResponseDto(tokens.AccessToken));
+        return Ok(new LoginResponseDto(
+            tokens.AccessToken,
+            isMobile ? tokens.RefreshToken : null
+        ));
+    }
+
+    [HttpPost("save-fcm-token")]
+    [Authorize]
+    public async Task<IActionResult> SaveFcmToken([FromBody] SaveTokenDto dto)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        var user = await _userManager.FindByIdAsync(userId!);
+        if (user == null) return NotFound();
+
+        user.FcmToken = dto.Token;
+        await _userManager.UpdateAsync(user);
+        return Ok(new { message = "Token saved successfully." });
     }
 
     [HttpPost("logout")]
     [Authorize]
-    [ProducesResponseType(StatusCodes.Status200OK)]
     public IActionResult Logout()
     {
         Response.Cookies.Delete("refreshToken", new CookieOptions
@@ -182,24 +168,18 @@ public class AuthController : ControllerBase
             SameSite = SameSiteMode.None,
             Path = "/",
         });
-
         return Ok(new { message = "Logged out successfully." });
     }
 
     [HttpPost("confirm-email")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> ConfirmEmail([FromBody] ConfirmEmailDto dto)
     {
         var (success, error) = await _authService.ConfirmEmailAsync(dto);
-        if (!success)
-            return BadRequest(new { message = error });
-
-        return Ok(new { message = "Email confirmed successfully. You can now log in." });
+        if (!success) return BadRequest(new { message = error });
+        return Ok(new { message = "Email confirmed successfully." });
     }
 
     [HttpPost("forget-password")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> ForgetPassword([FromBody] ForgetPasswordDto dto)
     {
         await _authService.ForgotPasswordAsync(dto.Email);
@@ -207,19 +187,14 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("reset-password")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDto dto)
     {
         var (success, error) = await _authService.ResetPasswordAsync(dto);
-        if (!success)
-            return BadRequest(new { message = error });
-
+        if (!success) return BadRequest(new { message = error });
         return Ok(new { message = "Password updated successfully." });
     }
 
     [HttpPost("resend-confirmation")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> ResendConfirmation([FromBody] ForgetPasswordDto dto)
     {
         await _authService.ResendConfirmationEmailAsync(dto.Email);
@@ -228,8 +203,6 @@ public class AuthController : ControllerBase
 
     [Authorize]
     [HttpGet("me")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public IActionResult Me()
     {
         return Ok(new
@@ -239,19 +212,6 @@ public class AuthController : ControllerBase
         });
     }
 
-    /// <summary>
-    /// Cross-domain refresh cookie.
-    ///
-    /// SameSite=None is required because the frontend lives on
-    /// orbitalhq.vercel.app and this API lives on orbital.runasp.net.
-    /// Strict/Lax cookies are never sent on cross-site requests, which
-    /// would break silent token refresh.
-    ///
-    /// `Secure=true` is mandatory when SameSite=None, and the API is
-    /// always served over HTTPS, so that's satisfied.
-    ///
-    /// `Path=/` ensures the cookie is sent on every API endpoint.
-    /// </summary>
     private void AppendRefreshTokenCookie(string token, DateTime expires)
     {
         Response.Cookies.Append("refreshToken", token, new CookieOptions

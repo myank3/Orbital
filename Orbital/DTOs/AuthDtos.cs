@@ -12,18 +12,30 @@ public record LoginDto(
     string Password
 );
 
+// 🔥 UPDATED: Changed 'Token' to 'AccessToken' and added 'RefreshToken'
 public record LoginResponseDto(
-    string Token
+    string AccessToken,
+    string? RefreshToken = null
 );
 
-// Backward-compatibility alias for Swagger / older references
+// Backward-compatibility alias
 public record AuthResponseDto(
-    string Token
+    string AccessToken
 );
 
 public record RefreshTokenRequestDto(
     string AccessToken,
     string RefreshToken
+);
+
+// 🔥 NEW: Needed for the mobile refresh logic
+public record RefreshRequestDto(
+    string? RefreshToken
+);
+
+// 🔥 NEW: Needed to receive the Push Notification token
+public record SaveTokenDto(
+    string Token
 );
 
 public record InternalTokens(

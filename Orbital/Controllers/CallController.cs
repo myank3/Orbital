@@ -1,5 +1,6 @@
 ﻿using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Orbital.DTOs;
 using Orbital.Models;
@@ -13,65 +14,67 @@ namespace Orbital.Controllers;
 public class CallController : ControllerBase
 {
     private readonly CallService _callService;
+    private readonly PushNotificationService _pushService; // 🔥 Added
+    private readonly UserManager<ApplicationUser> _userManager; // 🔥 Added
 
-    public CallController(CallService callService)
+    public CallController(
+        CallService callService,
+        PushNotificationService pushService,
+        UserManager<ApplicationUser> userManager)
     {
         _callService = callService;
+        _pushService = pushService;
+        _userManager = userManager;
     }
 
     private string CurrentUserId => User.FindFirstValue(ClaimTypes.NameIdentifier)!;
 
-    /// <summary>
-    /// Initiate a 1-on-1 audio/video call or group voice channel session.
-    /// </summary>
     [HttpPost("initiate")]
-    [ProducesResponseType(typeof(CallSessionDto), StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> InitiateCall([FromBody] InitiateCallDto dto)
     {
         var (success, error, session) = await _callService.InitiateCallAsync(CurrentUserId, dto);
         if (!success || session == null)
             return BadRequest(new { message = error });
 
+        // 🔥 TRIGGER PUSH NOTIFICATION FOR 1-ON-1 CALLS
+        if (!string.IsNullOrEmpty(dto.PeerId))
+        {
+            var recipient = await _userManager.FindByIdAsync(dto.PeerId);
+            var caller = await _userManager.FindByIdAsync(CurrentUserId);
+
+            if (recipient != null && !string.IsNullOrEmpty(recipient.FcmToken))
+            {
+                var callerName = caller?.DisplayName ?? caller?.UserHandle ?? "Someone";
+
+                // Fire and forget
+                _ = Task.Run(() => _pushService.SendCallPushAsync(
+                    recipient.FcmToken,
+                    callerName,
+                    session.SessionId.ToString()
+                ));
+            }
+        }
+
         return Ok(session);
     }
 
-    /// <summary>
-    /// End an active call session.
-    /// </summary>
     [HttpPost("{sessionId:guid}/end")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> EndCall(Guid sessionId)
     {
         var success = await _callService.EndCallAsync(sessionId);
-        if (!success)
-            return BadRequest(new { message = "Session not found or call already ended." });
-
+        if (!success) return BadRequest(new { message = "Session not found or call already ended." });
         return Ok(new { message = "Call ended successfully." });
     }
 
-    /// <summary>
-    /// Update call status (e.g., Active, Rejected, Missed).
-    /// </summary>
     [HttpPatch("{sessionId:guid}/status")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> UpdateStatus(Guid sessionId, [FromQuery] CallStatus status)
     {
         var success = await _callService.UpdateCallStatusAsync(sessionId, status);
-        if (!success)
-            return BadRequest(new { message = "Failed to update call session status." });
-
+        if (!success) return BadRequest(new { message = "Failed to update call session status." });
         return Ok(new { message = $"Call status updated to {status}." });
     }
 
-    /// <summary>
-    /// Fetch public STUN/TURN ICE servers for WebRTC peer connection handshakes.
-    /// Returns STUN plus any configured TURN providers (Cloudflare + Metered).
-    /// </summary>
     [HttpGet("ice-servers")]
-    [ProducesResponseType(typeof(List<IceServerConfigDto>), StatusCodes.Status200OK)]
     public async Task<IActionResult> GetIceServers()
     {
         var servers = await _callService.GetIceServersAsync();

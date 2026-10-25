@@ -2,6 +2,8 @@
 using Orbital.Data;
 using Orbital.DTOs;
 using Orbital.Models;
+using Orbital.Service;
+using Microsoft.AspNetCore.Identity; // Required for UserManager
 
 namespace Orbital.Service;
 
@@ -9,11 +11,19 @@ public class DirectMessageService
 {
     private readonly ApplicationDbContext _db;
     private readonly R2StorageService _r2;
+    private readonly PushNotificationService _pushService; // 🔥 Added
+    private readonly UserManager<ApplicationUser> _userManager; // 🔥 Added
 
-    public DirectMessageService(ApplicationDbContext db, R2StorageService r2)
+    public DirectMessageService(
+        ApplicationDbContext db,
+        R2StorageService r2,
+        PushNotificationService pushService,
+        UserManager<ApplicationUser> userManager)
     {
         _db = db;
         _r2 = r2;
+        _pushService = pushService;
+        _userManager = userManager;
     }
 
     public async Task<(bool Success, string? Error, DirectMessageDto? Message)> SendMessageAsync(
@@ -69,6 +79,26 @@ public class DirectMessageService
         await _db.DirectMessages.AddAsync(message);
         await _db.SaveChangesAsync();
 
+        // 🔥 TRIGGER PUSH NOTIFICATION HERE
+        var recipient = await _userManager.FindByIdAsync(dto.RecipientId);
+        var sender = await _userManager.FindByIdAsync(senderId);
+
+        if (recipient != null && !string.IsNullOrEmpty(recipient.FcmToken))
+        {
+            // Because it's E2EE, the server can't read the message.
+            // We use the sender's handle for the title.
+            var title = sender?.UserHandle ?? "New Message";
+            var body = hasMedia ? "📷 Sent you an attachment" : "Sent you a message";
+
+            // Fire and forget (don't await, so the API responds instantly)
+            _ = Task.Run(() => _pushService.SendMessagePushAsync(
+                recipient.FcmToken,
+                title,
+                body,
+                senderId // We pass senderId as the chatId so the app knows who to open
+            ));
+        }
+
         var messageDto = new DirectMessageDto(
             message.Id,
             message.SenderId,
@@ -121,9 +151,6 @@ public class DirectMessageService
                 m.RecipientId,
                 m.Ciphertext,
                 m.Nonce,
-                // Legacy rows (pre-E2EE): return plaintext Content so the
-                // frontend can still render them. New rows have Ciphertext
-                // set and empty Content → return null.
                 string.IsNullOrEmpty(m.Ciphertext) ? m.Content : null,
                 m.MediaUrl,
                 m.MediaKey,
@@ -166,9 +193,6 @@ public class DirectMessageService
         }
     }
 
-    /// <summary>
-    /// WhatsApp-style "Delete for me": hides the message from the caller's own view.
-    /// </summary>
     public async Task<(bool Success, string? Error)> DeleteMessageAsync(
         string userId,
         long messageId)
@@ -198,10 +222,6 @@ public class DirectMessageService
         return (true, null);
     }
 
-    /// <summary>
-    /// WhatsApp-style "Delete for everyone": only the original sender may
-    /// remove the message for both sides. Hard-deletes the row.
-    /// </summary>
     public async Task<(bool Success, string? Error)> DeleteForEveryoneAsync(
         string userId,
         long messageId)
@@ -215,9 +235,6 @@ public class DirectMessageService
 
         var mediaKey = message.MediaKey;
 
-        // Commit the DB delete first. If R2 cleanup fails after this, we have
-        // an orphan object (acceptable). If we deleted R2 first and the DB
-        // delete failed, we'd have a dangling pointer and a broken image.
         _db.DirectMessages.Remove(message);
         await _db.SaveChangesAsync();
 
@@ -236,10 +253,6 @@ public class DirectMessageService
         return (true, null);
     }
 
-    /// <summary>
-    /// WhatsApp-style "Clear chat": hides every message between the caller and
-    /// the target user from the caller's view only.
-    /// </summary>
     public async Task<(bool Success, string? Error)> ClearConversationAsync(
         string userId,
         string targetUserId)

@@ -8,6 +8,7 @@ namespace Orbital.Models
         public string UserHandle { get; set; } = string.Empty;
 
         // Fixed realm ("orbit") to compose "user@orbit"
+        public string? FcmToken { get; set; }
         public string Realm { get; set; } = "orbit";
 
         public string DisplayName { get; set; } = string.Empty;

@@ -3,3 +3,6 @@ obj/
 .vs/
 *.user
 *.suo
+App_Data/firebase-adminsdk.json
+App_Data/keys/
+appsettings.Development.json
