@@ -3,7 +3,9 @@ using Orbital.Data;
 using Orbital.DTOs;
 using Orbital.Models;
 using Orbital.Service;
-using Microsoft.AspNetCore.Identity; // Required for UserManager
+using Microsoft.AspNetCore.Identity;
+using System.Text.RegularExpressions;
+using Regex = System.Text.RegularExpressions.Regex;// 🔥 Required for stripping the temporary client ID
 
 namespace Orbital.Service;
 
@@ -88,17 +90,19 @@ public class DirectMessageService
             // Use the sender's DisplayName (e.g., "Mayank") instead of the handle
             var title = sender?.DisplayName ?? sender?.UserHandle ?? "New Message";
 
-            // Grab the actual text from the payload (since it's plain text)
-            // Grab the actual text from the payload (since it's plain text)
-            var messageText = !string.IsNullOrWhiteSpace(dto.Ciphertext)
-                ? dto.Ciphertext
-                : "New message";
+            // 🔥 FIX: Use dto.Ciphertext (which holds your plain text), and strip the [client:tmp-...] prefix
+            var rawContent = !string.IsNullOrWhiteSpace(dto.Ciphertext) ? dto.Ciphertext : "";
+            var cleanContent = Regex.Replace(rawContent, @"\[client:[^\]]+\]", "").Trim();
+
+            // Fallback if the message was only an attachment or somehow empty
+            var messageText = !string.IsNullOrWhiteSpace(cleanContent) ? cleanContent : "New message";
+
             // Truncate long messages so they fit nicely in the notification banner
             if (messageText.Length > 80)
                 messageText = messageText.Substring(0, 77) + "...";
 
             var body = hasMedia
-                ? (string.IsNullOrWhiteSpace(dto.Ciphertext) ? "📷 Photo" : $"📷 Photo: {messageText}")
+                ? (string.IsNullOrWhiteSpace(cleanContent) ? "📷 Photo" : $"📷 Photo: {messageText}")
                 : messageText;
 
             // Fire and forget (don't await, so the API responds instantly)

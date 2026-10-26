@@ -2,11 +2,12 @@
 using Orbital.Data;
 using Orbital.DTOs;
 using Orbital.Models;
-using Microsoft.AspNetCore.Identity; // 🔥 Added for UserManager
+using Microsoft.AspNetCore.Identity;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using System;
+using Regex = System.Text.RegularExpressions.Regex; // 🔥 FIX: Aliased to prevent "Group" namespace collision
 
 namespace Orbital.Service;
 
@@ -14,8 +15,8 @@ public class GroupService
 {
     private readonly ApplicationDbContext _db;
     private readonly R2StorageService _r2;
-    private readonly PushNotificationService _pushService; // 🔥 Added
-    private readonly UserManager<ApplicationUser> _userManager; // 🔥 Added
+    private readonly PushNotificationService _pushService;
+    private readonly UserManager<ApplicationUser> _userManager;
 
     public GroupService(
         ApplicationDbContext db,
@@ -29,9 +30,6 @@ public class GroupService
         _userManager = userManager;
     }
 
-    /// <summary>
-    /// Creates a new group channel and adds the creator as the initial member/owner.
-    /// </summary>
     public async Task<(bool Success, string? Error, GroupDto? Group)> CreateGroupAsync(
         string creatorId,
         CreateGroupDto dto)
@@ -55,7 +53,6 @@ public class GroupService
         await _db.Groups.AddAsync(group);
         await _db.SaveChangesAsync();
 
-        // Automatically assign creator as the initial group member
         var ownerMembership = new GroupMember
         {
             GroupId = group.Id,
@@ -79,9 +76,6 @@ public class GroupService
         return (true, null, groupDto);
     }
 
-    /// <summary>
-    /// Adds an existing user to a group if the requester is an existing member.
-    /// </summary>
     public async Task<(bool Success, string? Error)> AddMemberAsync(
         string requestingUserId,
         AddGroupMemberDto dto)
@@ -119,9 +113,6 @@ public class GroupService
         return (true, null);
     }
 
-    /// <summary>
-    /// Removes a user from a group (or leaves the group).
-    /// </summary>
     public async Task<(bool Success, string? Error)> RemoveOrLeaveMemberAsync(
         string requestingUserId,
         int groupId,
@@ -138,14 +129,12 @@ public class GroupService
         if (membership == null)
             return (false, "User is not a member of this group.");
 
-        // Users can remove themselves, or the group creator can remove other members
         var isSelfRemoval = requestingUserId == targetUserId;
         var isCreator = group.CreatedById == requestingUserId;
 
         if (!isSelfRemoval && !isCreator)
             return (false, "Only the group creator can remove other members.");
 
-        // If the creator leaves and there are other members, transfer ownership
         if (isSelfRemoval && isCreator && group.Members.Count > 1)
         {
             var nextOwner = group.Members.First(m => m.UserId != targetUserId);
@@ -154,7 +143,6 @@ public class GroupService
 
         _db.GroupMembers.Remove(membership);
 
-        // Delete group if no members remain
         if (group.Members.Count <= 1)
         {
             _db.Groups.Remove(group);
@@ -164,9 +152,6 @@ public class GroupService
         return (true, null);
     }
 
-    /// <summary>
-    /// Returns all groups the current user is a member of with active member counts.
-    /// </summary>
     public async Task<List<GroupDto>> GetUserGroupsAsync(string userId)
     {
         return await _db.GroupMembers
@@ -187,9 +172,6 @@ public class GroupService
             .ToListAsync();
     }
 
-    /// <summary>
-    /// Returns full metadata and member roster (UserProfileDto) for a group.
-    /// </summary>
     public async Task<GroupDetailDto?> GetGroupDetailAsync(int groupId, string userId)
     {
         var isMember = await _db.GroupMembers
@@ -228,9 +210,6 @@ public class GroupService
         );
     }
 
-    /// <summary>
-    /// Persists a new message in a group channel.
-    /// </summary>
     public async Task<(bool Success, string? Error, GroupMessageDto? Message)> SendGroupMessageAsync(
         string senderId,
         SendGroupMessageDto dto)
@@ -246,7 +225,6 @@ public class GroupService
             && string.IsNullOrWhiteSpace(dto.MediaKey))
             return (false, "Message cannot be empty.", null);
 
-        // R2 key must be scoped to this group.
         if (!string.IsNullOrEmpty(dto.MediaKey))
         {
             var expectedPrefix = $"group/{dto.GroupId}/";
@@ -258,7 +236,6 @@ public class GroupService
         if (sender == null)
             return (false, "Sender not found.", null);
 
-        // ── Ephemeral call signals — broadcast only, never persist ──
         if (!string.IsNullOrEmpty(dto.Content) &&
             dto.Content.StartsWith("[call:", StringComparison.Ordinal))
         {
@@ -283,7 +260,7 @@ public class GroupService
             Content = dto.Content?.Trim() ?? string.Empty,
             MediaUrl = dto.MediaUrl,
             MediaKey = dto.MediaKey,
-            MediaType = dto.MediaType,
+            MediaType = dto.MediaType, // 🔥 FIX: Removed ?? 0 because MediaType is int, not int?
             SentAt = DateTime.UtcNow
         };
 
@@ -294,13 +271,11 @@ public class GroupService
         var group = await _db.Groups.FindAsync(dto.GroupId);
         if (group != null)
         {
-            // 1. Get all member IDs in the group, EXCEPT the sender
             var memberIds = await _db.GroupMembers
                 .Where(gm => gm.GroupId == dto.GroupId && gm.UserId != senderId)
                 .Select(gm => gm.UserId)
                 .ToListAsync();
 
-            // 2. Fetch their FCM tokens
             var tokens = await _db.Users
                 .Where(u => memberIds.Contains(u.Id) && !string.IsNullOrEmpty(u.FcmToken))
                 .Select(u => u.FcmToken)
@@ -308,15 +283,17 @@ public class GroupService
 
             if (tokens.Count > 0)
             {
-                var messageText = message.Content;
-                if (!string.IsNullOrWhiteSpace(messageText) && messageText.Length > 80)
-                    messageText = messageText.Substring(0, 77) + "...";
+                // 🔥 FIX: Strip the [client:tmp-...] prefix from the message content
+                var rawContent = message.Content ?? "";
+                var cleanText = Regex.Replace(rawContent, @"\[client:[^\]]+\]", "").Trim();
 
-                var notificationBody = string.IsNullOrWhiteSpace(messageText)
+                if (!string.IsNullOrWhiteSpace(cleanText) && cleanText.Length > 80)
+                    cleanText = cleanText.Substring(0, 77) + "...";
+
+                var notificationBody = string.IsNullOrWhiteSpace(cleanText)
                     ? $"{sender.DisplayName}: 📷 Photo"
-                    : $"{sender.DisplayName}: {messageText}";
+                    : $"{sender.DisplayName}: {cleanText}";
 
-                // 3. Fire and forget (send to all tokens concurrently)
                 _ = Task.Run(async () =>
                 {
                     var tasks = tokens.Select(token =>
@@ -325,7 +302,7 @@ public class GroupService
                             group.Name,
                             notificationBody,
                             dto.GroupId.ToString(),
-                            "group_message" // 🔥 Passed correctly
+                            "group_message"
                         )
                     );
                     await Task.WhenAll(tasks);
@@ -349,10 +326,6 @@ public class GroupService
         return (true, null, messageDto);
     }
 
-    /// <summary>
-    /// Returns paginated messages for a group channel.
-    /// Returns messages plus a map of mediaKey -> presigned R2 URL.
-    /// </summary>
     public async Task<PresignedMessagesResponse<GroupMessageDto>> GetGroupMessagesAsync(
         int groupId,
         string userId,
@@ -410,12 +383,6 @@ public class GroupService
         return new PresignedMessagesResponse<GroupMessageDto>(messages, presigned);
     }
 
-    // ─── Delete group (creator only) ───────────────────────
-
-    /// <summary>
-    /// Deletes a group and all its messages and members. Creator only.
-    /// This is distinct from "leave" — everyone loses access, history gone.
-    /// </summary>
     public async Task<(bool Success, string? Error)> DeleteGroupAsync(
         string requestingUserId,
         int groupId)
@@ -430,21 +397,17 @@ public class GroupService
         if (group.CreatedById != requestingUserId)
             return (false, "Only the group creator can delete this group.");
 
-        // Remove all members first
         if (group.Members.Count > 0)
             _db.GroupMembers.RemoveRange(group.Members);
 
-        // Remove all messages in the group
         var messages = await _db.GroupMessages
             .Where(m => m.GroupId == groupId)
             .ToListAsync();
         if (messages.Count > 0)
             _db.GroupMessages.RemoveRange(messages);
 
-        // Remove the group itself
         _db.Groups.Remove(group);
 
-        // Capture R2 keys before the DB rows go away
         var mediaKeys = messages
             .Where(m => !string.IsNullOrEmpty(m.MediaKey))
             .Select(m => m.MediaKey!)
@@ -452,30 +415,18 @@ public class GroupService
 
         await _db.SaveChangesAsync();
 
-        // Best-effort R2 cleanup. Orphans are acceptable; failing the delete
-        // because R2 hiccupped would be worse.
         foreach (var key in mediaKeys)
         {
             try
             {
                 await _r2.DeleteAsync(key);
             }
-            catch
-            {
-                // orphan object — acceptable
-            }
+            catch { }
         }
 
         return (true, null);
     }
 
-    // ─── Soft-delete a group message (sender or creator only) ──
-
-    /// <summary>
-    /// Soft-deletes a group message for everyone. Only the original sender
-    /// or the group creator may delete. Returns the group id so the caller
-    /// can broadcast to the right channel.
-    /// </summary>
     public async Task<(bool Success, string? Error, int GroupId)> DeleteGroupMessageForEveryoneAsync(
         string requestingUserId,
         long messageId)
@@ -508,10 +459,7 @@ public class GroupService
             {
                 await _r2.DeleteAsync(mediaKey);
             }
-            catch
-            {
-                // orphan object — acceptable
-            }
+            catch { }
         }
 
         return (true, null, message.GroupId);
